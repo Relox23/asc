@@ -1,0 +1,11 @@
+{
+	"name": "IslandMap",
+	"tree": {
+		"$className": "DataModel",
+		"ServerStorage": {
+			"IslandMapGenerator": {
+				"$path": "src/IslandMapGenerator"
+			}
+		}
+	}
+}
