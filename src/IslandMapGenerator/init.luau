@@ -23,7 +23,7 @@ local Util = require(script.Util)
 
 local Generator = {}
 
-local ZONE_STEPS = { "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast" }
+local ZONE_STEPS = { "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast", "Sky" }
 
 local function islandFolder()
 	return Util.folder(workspace, "Island")

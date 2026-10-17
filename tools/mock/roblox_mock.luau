@@ -549,6 +549,7 @@ local KNOWN_ENUMS = {
 	SurfaceType = { "Smooth", "SmoothNoOutlines", "Studs", "Inlet", "Universal" },
 	NormalId = { "Top", "Bottom", "Front", "Back", "Left", "Right" },
 	MeshType = { "Brick", "Cylinder", "Head", "Sphere", "Torso", "Wedge", "FileMesh" },
+	CollisionFidelity = { "Default", "Hull", "Box", "PreciseConvexDecomposition" },
 	ModelStreamingMode = { "Default", "Atomic", "Persistent", "PersistentPerPlayer", "Nonatomic" },
 	Technology = { "Legacy", "Voxel", "Compatibility", "ShadowMap", "Future", "Unified" },
 	EasingStyle = { "Linear", "Sine", "Quad", "Cubic", "Quart", "Quint", "Exponential", "Back", "Bounce", "Elastic" },
@@ -629,6 +630,7 @@ local CLASS = {
 	WedgePart = { base = "BasePart", props = PART_PROPS },
 	CornerWedgePart = { base = "BasePart", props = PART_PROPS },
 	TrussPart = { base = "BasePart", props = PART_PROPS },
+	MeshPart = { base = "BasePart", props = PART_PROPS, extra = { "CollisionFidelity", "MeshId", "TextureID", "DoubleSided" } },
 	SpawnLocation = {
 		base = "BasePart",
 		props = PART_PROPS,

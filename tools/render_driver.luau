@@ -2,7 +2,7 @@
 local Gen = mockRequire(GENERATOR)
 local Landscape = mockRequire(GENERATOR.Landscape)
 local Layout = mockRequire(GENERATOR.IslandLayout)
-Gen.Build({ "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast" })
+Gen.Build({ "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast", "Sky" })
 
 local VIEWS = __VIEWS__
 

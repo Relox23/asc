@@ -16,6 +16,7 @@ Config.Build = {
 	Dunes = true,
 	Ruins = true,
 	Coast = true,
+	Sky = true, -- clouds
 	Atmosphere = true,
 }
 

@@ -21,10 +21,11 @@ Wildwood → Vale → Hollow → Remnant → Dunes.
 | **Shirayuki Vale** | Demon Slayer winter mountains | Deep snowy pine forest covering most of the region, a very small Japanese village (6 minka houses, well, shrine, lanterns, frozen pond, torii), Jizo statues along the trail, a lone charcoal-burner's hut, and **Ryuudou Temple** high on a mountain far from the village: a long stone stairway with torii and lanterns, a two-storey gate, the main hall, a five-storey pagoda, a bell pavilion and a sacred cedar. |
 | **The Hollow Expanse** | Hueco Mundo | White-sand desert under eternal night with a giant crescent moon, the **Pale Bastion** (colossal white dome ringed by needle towers), crystal-white dead trees, leaning pale spires and arches, giant half-buried skeletons and glowing fissures. |
 | **Ashen Remnant** | — | Black-sand dunes with 34 broken, tilted and toppled skyscrapers, no streets, ~120 wrecked cars, bent lamps, charred trees, fallen billboards, flooded craters and smouldering fires. |
-| **Sea of Whispering Dunes** | Augria Dunes | Towering golden dunes with the **Starwarden Watchtower** in the exact middle: seven tiers with glowing star windows, an observatory with an armillary sphere around a captive star, and a pillar of light visible from anywhere on the island (teleport circles carry players to the top). Hoodoos, sandstone arches, a buried colossus, a leviathan skeleton and lost caravans. |
+| **Sea of Whispering Dunes** | Augria Dunes | Towering golden dunes with the **Pleiades-style watchtower** in the exact middle (1,150 studs tall, see below), wreathed in a sea of clouds; teleport circles carry players from the entrance to the crown. Hoodoos, sandstone arches, a buried colossus, a leviathan skeleton and lost caravans. |
+| **Sky** | — | About 100 puffy clouds: a sea of clouds around the watchtower just below its crown, high clouds drifting over the island, mist on the temple mountain and in the snowy valleys, morning mist over Mirror Lake and dark ash clouds over the ruins. The Hollow's night sky stays clear. |
 | **The Endless Shore** | — | Sand beach around the whole island, decorated per region (palms, driftwood, snowy rocks, ice, bones, wrecks), a lighthouse, a shipwreck and an invisible wall out at sea. |
 
-None of these are copies. Every building, layout and name is an original
+Apart from the watchtower, which you asked to resemble the original, none of these are copies. Every building, layout and name is an original
 design that only borrows the feel of the places it was inspired by.
 
 ## How to use it
@@ -64,10 +65,51 @@ Gen.Build({ "Hub", "Atmosphere" })  -- several at once
 Gen.Clear()                         -- delete the generated map and all terrain
 ```
 
-Step names: `Terrain`, `Hub`, `Forest`, `Snow`, `Hollow`, `Dunes`, `Ruins`, `Coast`, `Atmosphere`.
+Step names: `Terrain`, `Hub`, `Forest`, `Snow`, `Hollow`, `Dunes`, `Ruins`, `Coast`, `Sky`, `Atmosphere`.
 
 If you edit the scripts and the command bar still seems to run the old
 version, save and reopen the place so `require` loads your changes.
+
+## The watchtower (Blender mesh)
+
+![Watchtower rendered in Blender](docs/previews/pleiades_watchtower_blender.png)
+
+The watchtower in the dunes is modelled after the Pleiades Watchtower from
+Re:Zero: a flared base with a temple entrance, a long slender shaft with a
+balcony, a crown of six onion-domed pillars whose stalactite roots hang far
+below, a saucer-ringed needle spire, and two colossal horn arches rising over
+it. It comes in two versions with exactly the same shape:
+
+- **Blender mesh (smooth, best looking):** `assets/PleiadesWatchtower.fbx`
+  (also `.obj`, and the editable `.blend`). 14 meshes, ~27k triangles in
+  total, each mesh under 10k triangles.
+- **Parts version:** built automatically when no mesh is imported, so the map
+  works without any extra step.
+
+To use the mesh:
+
+1. In Studio, use **Home → Import 3D** (or File → Import 3D) and pick
+   `assets/PleiadesWatchtower.fbx`. Keep the default settings and click Import.
+2. Make sure the imported model is named **`PleiadesWatchtower`** (rename it
+   if needed). You can leave it in Workspace; the generator moves it to
+   ServerStorage and keeps it there as the original.
+3. Run `require(game.ServerStorage.IslandMapGenerator).Build({ "Dunes" })`
+   (or a full `Build()`).
+
+The generator stands the mesh upright whichever axis it was imported with,
+scales it to full size (it is exported at 1/10 scale so the importer never
+hits Roblox's 2048-stud mesh limit), turns the entrance toward the island
+center, places it in the middle of the dunes, and colours each piece by its
+name: `Stone_` white marble, `Trim_` warm sandstone stripes, `Gold_` gold
+rings, `Dark_` doorway and windows.
+
+To change the model, open `assets/PleiadesWatchtower.blend`, or edit
+`tools/blender/pleiades_watchtower.py` and rebuild it:
+
+```sh
+pip install bpy   # Blender as a Python module
+python tools/blender/pleiades_watchtower.py assets --render
+```
 
 ## Settings
 
@@ -76,7 +118,7 @@ version, save and reopen the place so `require` loads your changes.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `PLAYER_START` | `"Forest"` | `"Forest"` = spawn in the Wildwood arrival circle, `"Hub"` = spawn in the capital in front of the palace. Both spawn pads are built; this picks the enabled one. |
-| `FOLIAGE_DENSITY` | `1` | Multiplies trees, bushes and beach decor. `1` gives about 123k parts in total; `0.5` roughly halves the forests. |
+| `FOLIAGE_DENSITY` | `1` | Multiplies trees, bushes and beach decor. `1` gives about 125k parts in total; `0.5` roughly halves the forests. |
 | `Build` | all `true` | Turn steps on or off. |
 | `STREAMING` | `true` | Enable instance streaming. |
 | `CLEAR_EXISTING` | `true` | Clear old terrain and generated folders before building. |
@@ -115,7 +157,10 @@ src/IslandMapGenerator/        the generator (Rojo-compatible: default.project.j
   Zones/*.luau                 one builder per region
   Client/IslandAtmosphere.client.luau
 dist/IslandMapGenerator.rbxmx  ready-to-insert model (built from src)
+  Watchtower.luau               the dunes watchtower (imported mesh or parts)
+assets/PleiadesWatchtower.*    Blender model of the watchtower (.fbx/.obj/.blend)
 tools/                         test harness (Roblox API mock), previews, rbxmx builder
+tools/blender/                 Blender script that builds the watchtower mesh
 docs/previews/                 software-rendered previews
 ```
 
@@ -129,4 +174,6 @@ python3 tools/bundle.py tools/test_driver.luau /tmp/test.luau && luau /tmp/test.
 python3 tools/preview.py ./luau docs/previews/island_map.png 360                        # top-down map
 python3 tools/render.py ./luau /tmp/renders                                             # 3D preview renders
 python3 tools/build_rbxmx.py                                                            # rebuild dist/*.rbxmx
+python3 tools/tests/make_import_fixture.py assets/PleiadesWatchtower.obj > /tmp/fx.luau  # imported-mesh placement test:
+cat /tmp/fx.luau tools/tests/import_driver.luau > /tmp/d.luau && python3 tools/bundle.py /tmp/d.luau /tmp/t.luau && luau /tmp/t.luau
 ```

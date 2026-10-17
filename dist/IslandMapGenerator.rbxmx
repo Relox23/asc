@@ -1,7 +1,7 @@
 <roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
 	<External>null</External>
 	<External>nil</External>
-	<Item class="ModuleScript" referent="RBX00000011">
+	<Item class="ModuleScript" referent="RBX00000013">
 		<Properties>
 			<string name="Name">IslandMapGenerator</string>
 			<ProtectedString name="Source"><![CDATA[--[[
@@ -29,7 +29,7 @@ local Util = require(script.Util)
 
 local Generator = {}
 
-local ZONE_STEPS = { "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast" }
+local ZONE_STEPS = { "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast", "Sky" }
 
 local function islandFolder()
 	return Util.folder(workspace, "Island")
@@ -709,6 +709,7 @@ Config.Build = {
 	Dunes = true,
 	Ruins = true,
 	Coast = true,
+	Sky = true, -- clouds
 	Atmosphere = true,
 }
 
@@ -2616,11 +2617,447 @@ return Util
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="Folder" referent="RBX00000010">
+		<Item class="ModuleScript" referent="RBX00000009">
+			<Properties>
+				<string name="Name">Watchtower</string>
+				<ProtectedString name="Source"><![CDATA[--[[
+	Watchtower
+	The great watchtower in the middle of the dunes, shaped after the Pleiades
+	Watchtower: a flared base with a temple entrance, a long slender shaft with
+	a balcony, a crown of six onion-domed pillars whose stalactite roots hang
+	far below, a saucer-ringed central spire, and two colossal horn-shaped
+	arches rising over it all.
+
+	If a mesh version has been imported into Studio (a Model named
+	"PleiadesWatchtower" in ServerStorage or Workspace, made from
+	assets/PleiadesWatchtower.fbx), that mesh is used. Otherwise the same
+	shape is built from parts. The numbers below mirror
+	tools/blender/pleiades_watchtower.py, so both versions line up.
+]]
+
+local Util = require(script.Parent.Util)
+
+local Watchtower = {}
+
+local M = Enum.Material
+local rgb = Color3.fromRGB
+local box, column, disc, wedge = Util.box, Util.column, Util.disc, Util.wedge
+local NOSHADOW = { shadow = false }
+local NOCOL_NOSHADOW = { collide = false, shadow = false }
+local TAU = math.pi * 2
+local HALF_PI = math.pi / 2
+
+Watchtower.IMPORT_NAME = "PleiadesWatchtower"
+Watchtower.HEIGHT = 1153 -- from the horn feet (22 studs below ground) to the horn tips
+local FOOT_DEPTH = 22
+Watchtower.CROWN_TOP = 704 -- walkable crown platform
+Watchtower.BALCONY_TOP = 575
+
+local STYLE = {
+	Stone = { color = rgb(238, 234, 226), material = M.Marble },
+	Trim = { color = rgb(222, 160, 104), material = M.Sandstone },
+	Gold = { color = rgb(214, 172, 74), material = M.Foil },
+	Dark = { color = rgb(34, 30, 30), material = M.SmoothPlastic },
+	Glow = { color = rgb(170, 220, 255), material = M.Neon },
+}
+
+-- Shape ------------------------------------------------------------------------------------------
+local function sample(fn, a, b, n, out)
+	for i = 0, n do
+		table.insert(out, fn(a + (b - a) * i / n))
+	end
+end
+
+local function bodyProfile()
+	local p = { { 0, -8 }, { 152, -8 }, { 152, 4 }, { 142, 4 }, { 142, 12 }, { 130, 12 }, { 130, 22 }, { 122, 22 }, { 122, 26 } }
+	sample(function(t)
+		return { 44 + 78 * (1 - t) ^ 2.6, 26 + 132 * t }
+	end, 0.02, 1, 18, p)
+	for _, q in ipairs({ { 52, 158 }, { 52, 166 }, { 44, 168 } }) do
+		table.insert(p, q)
+	end
+	local z, r0, r1, top = 168, 42, 25, 560
+	for k = 0, 4 do
+		local za, zb = z + k * (top - z) / 5, z + (k + 1) * (top - z) / 5
+		local ra = r0 + (r1 - r0) * ((za - z) / (top - z)) ^ 0.8
+		local rb = r0 + (r1 - r0) * ((zb - z) / (top - z)) ^ 0.8
+		for _, q in ipairs({ { ra, za + 0.1 }, { rb, zb - 5 }, { rb + 3, zb - 4 }, { rb + 3, zb - 1 }, { rb, zb } }) do
+			table.insert(p, q)
+		end
+	end
+	for _, q in ipairs({ { 25, 560 }, { 46, 563 }, { 48, 568 }, { 48, 572 }, { 27, 575 }, { 26, 640 } }) do
+		table.insert(p, q)
+	end
+	sample(function(t)
+		return { 26 + 50 * t ^ 2.2, 640 + 52 * t }
+	end, 0.05, 1, 10, p)
+	for _, q in ipairs({ { 80, 696 }, { 80, 702 }, { 70, 704 }, { 0, 704 } }) do
+		table.insert(p, q)
+	end
+	return p
+end
+
+local SPIRE_PROFILE = {
+	{ 0, 702 }, { 19, 702 }, { 19, 792 }, { 23, 794 }, { 23, 800 }, { 19, 802 },
+	{ 24, 808 }, { 29, 818 }, { 31, 828 }, { 28, 840 }, { 20, 850 }, { 11, 858 }, { 6, 864 }, { 6, 868 },
+	{ 40, 869 }, { 90, 871 }, { 124, 874 }, { 130, 877 }, { 124, 880 }, { 88, 883 }, { 40, 885 }, { 9, 886 },
+	{ 9, 904 }, { 13, 908 }, { 13, 912 }, { 9, 914 }, { 6, 930 }, { 4, 970 }, { 2, 1010 }, { 0.8, 1040 }, { 0, 1044 },
+}
+
+local SATELLITE_PROFILE = {
+	{ 0, 468 }, { 1.5, 480 }, { 3.5, 510 }, { 6, 552 }, { 8.5, 600 }, { 11, 650 }, { 13, 692 },
+	{ 12, 704 }, { 12, 764 }, { 15, 766 }, { 15, 771 }, { 12, 773 }, { 17, 782 }, { 19.5, 792 },
+	{ 17, 803 }, { 11, 811 }, { 6, 817 }, { 4, 822 }, { 2.4, 840 }, { 1, 862 }, { 0, 866 },
+}
+local SATELLITE_RADIUS = 54
+
+-- Revolved profile approximated with stacked cylinders. cf is the axis base (Y up).
+local function latheParts(m, cf, profile, style, minRadius)
+	for i = 1, #profile - 1 do
+		local r0, z0 = profile[i][1], profile[i][2]
+		local r1, z1 = profile[i + 1][1], profile[i + 1][2]
+		local dz = z1 - z0
+		if dz > 0.25 then
+			local r = math.max((r0 + r1) / 2, minRadius or 0.6)
+			Util.cylinder(m, cf * CFrame.new(0, (z0 + z1) / 2, 0) * CFrame.Angles(0, 0, HALF_PI), dz + 0.05, r * 2, style.color, style.material)
+		end
+	end
+end
+
+local function bezier(p0, p1, p2, p3, t)
+	local u = 1 - t
+	return p0 * (u * u * u) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t * t * t)
+end
+
+-- One horn arch in the tower's local X/Y plane (side = -1 or 1).
+local function horn(m, T, side, style, inset, scale, depthScale)
+	local p0 = Vector3.new(side * 285, -20, 0)
+	local p1 = Vector3.new(side * 272, 440, 0)
+	local p2 = Vector3.new(side * 222, 860, 0)
+	local p3 = Vector3.new(side * 30, 1130, 0)
+	local n = 22
+	for i = 0, n - 1 do
+		local ta, tb = i / n, (i + 1) / n
+		local a, b = bezier(p0, p1, p2, p3, ta), bezier(p0, p1, p2, p3, tb)
+		local t = (ta + tb) / 2
+		local d = (b - a).Unit
+		local across = Vector3.new(d.Y, -d.X, 0) * side
+		local w = (92 * (1 - t) ^ 1.2 + 3) * scale + math.max(0, 1 - t * 8) * 40 * scale
+		local dep = (50 * (1 - t) ^ 1.1 + 2) * depthScale
+		local mid = (a + b) / 2 + across * (inset * w)
+		local cf = T * CFrame.fromMatrix(mid, across, d)
+		box(m, cf, Vector3.new(w, (b - a).Magnitude + 2, dep), style.color, style.material)
+	end
+end
+
+local function portico(m, T)
+	local stone = STYLE.Stone
+	local y0 = -128 -- local Z (front is -Z)
+	box(m, T * CFrame.new(0, 6, y0 - 6), Vector3.new(78, 4, 34), stone.color, stone.material)
+	for k = 0, 2 do
+		box(m, T * CFrame.new(0, 3 - k * 1.5, y0 - 24 - k * 3), Vector3.new(78 - k * 4, 8 - k * 3, 3), stone.color, stone.material)
+	end
+	for _, x in ipairs({ -30, -18, -6, 6, 18, 30 }) do
+		column(m, (T * CFrame.new(x, 8, y0 - 16)).Position, 34, 5.2, stone.color, stone.material)
+		box(m, T * CFrame.new(x, 43, y0 - 16), Vector3.new(7, 2, 7), stone.color, stone.material, NOSHADOW)
+	end
+	box(m, T * CFrame.new(0, 46, y0 - 10), Vector3.new(76, 6, 22), stone.color, stone.material)
+	-- pediment: two wedges back to back
+	for _, s in ipairs({ -1, 1 }) do
+		wedge(m, T * CFrame.new(s * 20, 56.5, y0 - 10) * CFrame.Angles(0, s * -HALF_PI, 0), Vector3.new(24, 15, 40), stone.color, stone.material)
+	end
+	for _, x in ipairs({ -36, 36 }) do
+		box(m, T * CFrame.new(x, 26, y0 + 4), Vector3.new(6, 44, 40), stone.color, stone.material)
+	end
+	box(m, T * CFrame.new(0, 24, -122), Vector3.new(22, 34, 14), STYLE.Dark.color, STYLE.Dark.material)
+end
+
+local function buildParts(parent, T)
+	local m = Util.model(parent, "PleiadesWatchtower")
+	latheParts(m, T, bodyProfile(), STYLE.Stone)
+	latheParts(m, T, SPIRE_PROFILE, STYLE.Stone)
+	for k = 0, 5 do
+		local a = k / 6 * TAU
+		latheParts(m, T * CFrame.new(math.cos(a) * SATELLITE_RADIUS, 0, math.sin(a) * SATELLITE_RADIUS), SATELLITE_PROFILE, STYLE.Stone)
+		local p = T * CFrame.new(math.cos(a) * SATELLITE_RADIUS, 0, math.sin(a) * SATELLITE_RADIUS)
+		disc(m, (p * CFrame.new(0, 768.5, 0)).Position, 5, 31.4, STYLE.Gold.color, STYLE.Gold.material, NOSHADOW)
+		disc(m, (p * CFrame.new(0, 691.5, 0)).Position, 3.5, 28.2, STYLE.Gold.color, STYLE.Gold.material, NOSHADOW)
+	end
+	-- warm bands and gold rings
+	for _, b in ipairs({ { 22, 123, 3 }, { 150, 50, 2 }, { 562, 46.5, 2 }, { 690, 79, 3 } }) do
+		disc(m, (T * CFrame.new(0, b[1] + b[3] / 2, 0)).Position, b[3], b[2] * 2 + 1.2, STYLE.Trim.color, STYLE.Trim.material, NOSHADOW)
+	end
+	disc(m, (T * CFrame.new(0, 877, 0)).Position, 3, 262, STYLE.Gold.color, STYLE.Gold.material, NOSHADOW)
+	disc(m, (T * CFrame.new(0, 797, 0)).Position, 4.5, 47.2, STYLE.Gold.color, STYLE.Gold.material, NOSHADOW)
+	-- ribs on the flare
+	for k = 0, 15 do
+		local a = k / 16 * TAU + TAU / 32
+		for i = 0, 11 do
+			local function at(t)
+				local r = 44 + 78 * (1 - t) ^ 2.6 + 1.6
+				return (T * CFrame.new(math.cos(a) * r, 26 + 132 * t, math.sin(a) * r)).Position
+			end
+			Util.rod(m, at(i / 12), at((i + 1) / 12), 3.4, STYLE.Trim.color, STYLE.Trim.material, NOSHADOW)
+		end
+	end
+	-- window slits
+	for _, z in ipairs({ 230, 330, 430, 520, 610 }) do
+		local t = math.clamp((z - 168) / (560 - 168), 0, 1)
+		local r = z < 560 and 42 + (25 - 42) * t ^ 0.8 or 26
+		for k = 0, 5 do
+			local a = k / 6 * TAU + (z % 7) * 0.2
+			local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+			local cf = T * CFrame.lookAt(dir * (r - 0.4) + Vector3.new(0, z, 0), dir * r * 2 + Vector3.new(0, z, 0))
+			box(m, cf, Vector3.new(3.2, 12, 2.4), STYLE.Dark.color, STYLE.Dark.material, NOSHADOW)
+		end
+	end
+	portico(m, T)
+	for _, s in ipairs({ -1, 1 }) do
+		horn(m, T, s, STYLE.Stone, 0, 1, 1)
+		horn(m, T, s, STYLE.Trim, -0.42, 0.22, 1.06)
+	end
+	return m
+end
+
+-- Imported mesh ----------------------------------------------------------------------------------------
+function Watchtower.findImported()
+	local ServerStorage = game:GetService("ServerStorage")
+	local source = ServerStorage:FindFirstChild(Watchtower.IMPORT_NAME)
+	if not source then
+		local inWorkspace = workspace:FindFirstChild(Watchtower.IMPORT_NAME)
+		if inWorkspace then
+			-- keep the imported original safe in ServerStorage so rebuilds can reuse it
+			inWorkspace.Parent = ServerStorage
+			source = inWorkspace
+		end
+	end
+	return source
+end
+
+local CORNERS = {}
+for _, x in ipairs({ -1, 1 }) do
+	for _, y in ipairs({ -1, 1 }) do
+		for _, z in ipairs({ -1, 1 }) do
+			table.insert(CORNERS, Vector3.new(x, y, z))
+		end
+	end
+end
+
+local function bounds(parts)
+	local lo = Vector3.new(math.huge, math.huge, math.huge)
+	local hi = -lo
+	for _, p in ipairs(parts) do
+		local half = p.Size / 2
+		for _, c in ipairs(CORNERS) do
+			local w = p.CFrame * (c * half)
+			lo = lo:Min(w)
+			hi = hi:Max(w)
+		end
+	end
+	return lo, hi
+end
+
+local function transform(parts, cf)
+	for _, p in ipairs(parts) do
+		p.CFrame = cf * p.CFrame
+	end
+end
+
+local function about(center, rot)
+	return CFrame.new(center) * rot * CFrame.new(-center)
+end
+
+local function findPart(parts, pattern)
+	for _, p in ipairs(parts) do
+		if string.find(p.Name, pattern) then
+			return p
+		end
+	end
+	return nil
+end
+
+local function placeImported(parent, source, base, front)
+	local m = source:Clone()
+	m.Name = "PleiadesWatchtower"
+	local parts = {}
+	for _, d in ipairs(m:GetDescendants()) do
+		if d:IsA("BasePart") then
+			table.insert(parts, d)
+		end
+	end
+	if source:IsA("BasePart") then
+		table.insert(parts, m)
+	end
+	if #parts == 0 then
+		warn("[IslandMap] The imported PleiadesWatchtower has no parts; building the parts version instead")
+		m:Destroy()
+		return nil
+	end
+
+	-- 1. stand it upright: the tallest axis becomes Y
+	local lo, hi = bounds(parts)
+	local size, center = hi - lo, (lo + hi) / 2
+	if size.X > size.Y and size.X >= size.Z then
+		transform(parts, about(center, CFrame.Angles(0, 0, HALF_PI)))
+	elseif size.Z > size.Y and size.Z > size.X then
+		transform(parts, about(center, CFrame.Angles(-HALF_PI, 0, 0)))
+	end
+	local porch = findPart(parts, "Portico")
+	lo, hi = bounds(parts)
+	center = (lo + hi) / 2
+	if porch and porch.Position.Y > center.Y then
+		transform(parts, about(center, CFrame.Angles(math.pi, 0, 0)))
+	end
+
+	-- 2. scale to full size
+	lo, hi = bounds(parts)
+	center = (lo + hi) / 2
+	local k = Watchtower.HEIGHT / (hi.Y - lo.Y)
+	for _, p in ipairs(parts) do
+		local rot = p.CFrame.Rotation
+		p.Size = p.Size * k
+		p.CFrame = CFrame.new(center + (p.Position - center) * k) * rot
+	end
+
+	-- 3. turn the entrance to face `front`
+	local body = findPart(parts, "Body")
+	lo, hi = bounds(parts)
+	center = (lo + hi) / 2
+	local axis = body and body.Position or center
+	if porch then
+		local d = porch.Position - axis
+		local yaw = math.atan2(d.Z, d.X) - math.atan2(front.Z, front.X)
+		transform(parts, about(Vector3.new(axis.X, center.Y, axis.Z), CFrame.Angles(0, yaw, 0)))
+	end
+
+	-- 4. stand it on the ground at `base`
+	lo, hi = bounds(parts)
+	axis = body and body.Position or (lo + hi) / 2
+	transform(parts, CFrame.new(base.X - axis.X, base.Y - FOOT_DEPTH - lo.Y, base.Z - axis.Z))
+
+	-- 5. colour by name prefix
+	for _, p in ipairs(parts) do
+		p.Anchored = true
+		local prefix = string.match(p.Name, "^(%a+)_")
+		local style = prefix and STYLE[prefix]
+		if style then
+			p.Color = style.color
+			p.Material = style.material
+		end
+		if prefix == "Glow" then
+			p.CanCollide = false
+			p.CastShadow = false
+		end
+		pcall(function()
+			p.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition
+		end)
+	end
+	if m:IsA("Model") then
+		m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	end
+	m.Parent = parent
+	return m
+end
+
+-- Teleport circles --------------------------------------------------------------------------------------
+local TELEPORT_SOURCE = [[
+-- Teleport circle: touching it carries a player to the linked circle.
+local pad = script.Parent
+local busy = {}
+pad.Touched:Connect(function(hit)
+	local character = hit.Parent
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or busy[character] then
+		return
+	end
+	local target = pad:GetAttribute("Target")
+	if typeof(target) ~= "Vector3" then
+		return
+	end
+	busy[character] = true
+	character:PivotTo(CFrame.new(target + Vector3.new(0, 5, 0)))
+	task.delay(2, function()
+		busy[character] = nil
+	end)
+end)
+]]
+
+local function teleportPad(parent, pos, target, color)
+	local pad = disc(parent, pos, 1, 16, color, M.Neon, NOSHADOW)
+	pad.Name = "TeleportCircle"
+	pad.Transparency = 0.25
+	pad:SetAttribute("Target", target)
+	Util.pointLight(pad, color, 2, 24)
+	Util.particles(pad, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(color),
+		Size = Util.ns(0, 0.8, 1, 0),
+		Lifetime = NumberRange.new(1.5, 2.5),
+		Rate = 25,
+		Speed = NumberRange.new(4, 8),
+		SpreadAngle = Vector2.new(10, 10),
+		EmissionDirection = Enum.NormalId.Right,
+		LightEmission = 1,
+	})
+	local s = Instance.new("Script")
+	s.Name = "Teleport"
+	s.Source = TELEPORT_SOURCE
+	s.Parent = pad
+	return pad
+end
+
+---------------------------------------------------------------------------------------------------------
+-- Builds the tower standing on `base` (ground point) with its entrance facing `front`.
+function Watchtower.Build(parent, base, front)
+	front = Vector3.new(front.X, 0, front.Z).Unit
+	local T = CFrame.lookAt(base, base + front) -- local -Z is the entrance side
+	local source = Watchtower.findImported()
+	local m = source and placeImported(parent, source, base, front)
+	if m then
+		Util.log("  using the imported PleiadesWatchtower mesh")
+	else
+		m = buildParts(parent, T)
+		m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	end
+
+	local extras = Util.model(parent, "WatchtowerLights")
+	extras.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	-- warm lights around the balcony and the crown, and a glint like in the old paintings
+	for k = 0, 3 do
+		local a = k / 4 * TAU + TAU / 8
+		local p = box(extras, T * CFrame.new(math.cos(a) * 44, Watchtower.BALCONY_TOP + 3, math.sin(a) * 44), Vector3.new(1.4, 2.4, 1.4), rgb(255, 220, 160), M.Neon, NOCOL_NOSHADOW)
+		Util.pointLight(p, rgb(255, 210, 150), 1.5, 30)
+	end
+	local glint = box(extras, T * CFrame.new(0, 420, -38) * CFrame.Angles(math.pi / 4, 0, math.pi / 4), Vector3.new(3, 3, 3), STYLE.Glow.color, M.Neon, NOCOL_NOSHADOW)
+	Util.pointLight(glint, STYLE.Glow.color, 2, 50)
+	Util.particles(glint, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(rgb(220, 240, 255), rgb(255, 236, 200)),
+		Size = Util.ns(0, 6, 1, 0),
+		Lifetime = NumberRange.new(1, 2),
+		Rate = 6,
+		Speed = NumberRange.new(0, 0.5),
+		LightEmission = 1,
+	})
+
+	-- teleport circles: in front of the entrance <-> the crown platform
+	local bottom = (T * CFrame.new(0, 0.6, -176)).Position
+	local topPad = (T * CFrame.new(26, Watchtower.CROWN_TOP + 0.6, -15)).Position
+	local landing = (T * CFrame.new(-26, Watchtower.CROWN_TOP + 0.6, 15)).Position
+	teleportPad(extras, bottom, landing, rgb(160, 214, 255))
+	teleportPad(extras, topPad, bottom + front * 16, rgb(255, 220, 150))
+	return m
+end
+
+return Watchtower
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="Folder" referent="RBX00000012">
 			<Properties>
 				<string name="Name">Zones</string>
 			</Properties>
-			<Item class="ModuleScript" referent="RBX00000009">
+			<Item class="ModuleScript" referent="RBX0000000A">
 				<Properties>
 					<string name="Name">Coast</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -2854,15 +3291,13 @@ return Coast
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000A">
+			<Item class="ModuleScript" referent="RBX0000000B">
 				<Properties>
 					<string name="Name">Dunes</string>
 					<ProtectedString name="Source"><![CDATA[--[[
 	Sea of Whispering Dunes
 	Towering golden dunes that roll forever. In their exact middle stands the
-	Starwarden Watchtower: seven stacked tiers with glowing star windows, an
-	observatory crowned by an armillary sphere around a captive star, and a
-	pillar of light that can be seen from anywhere on the island.
+	great watchtower (see Watchtower.luau), wreathed in a sea of clouds.
 	Around it: wind-carved hoodoos and arches, a colossal buried statue,
 	the bones of a sand leviathan and lost caravans.
 ]]
@@ -2872,24 +3307,22 @@ local Landscape = require(script.Parent.Parent.Landscape)
 local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
+local Watchtower = require(script.Parent.Parent.Watchtower)
 
 local Dunes = {}
 
 local M = Enum.Material
 local rgb = Color3.fromRGB
-local box, ball, column, disc, rod, beam, wedge = Util.box, Util.ball, Util.column, Util.disc, Util.rod, Util.beam, Util.wedge
+local box, ball, rod, wedge = Util.box, Util.ball, Util.rod, Util.wedge
 local NOCOL = { collide = false }
 local NOSHADOW = { shadow = false }
-local NOCOL_NOSHADOW = { collide = false, shadow = false }
 local TAU = math.pi * 2
 local HALF_PI = math.pi / 2
 local L = Layout.Landmarks
 
-local STONE = rgb(226, 212, 182)
 local STONE_ALT = rgb(214, 196, 160)
 local STONE_DARK = rgb(184, 152, 112)
 local GOLD = rgb(214, 172, 74)
-local STARLIGHT = rgb(160, 214, 255)
 local SANDSTONE = rgb(204, 160, 112)
 
 local function flatCF(pos, dir)
@@ -2898,173 +3331,6 @@ end
 
 local function ground(p)
 	return Vector3.new(p.X, Landscape.heightAt(p.X, p.Z), p.Z)
-end
-
-local TELEPORT_SOURCE = [[
--- Teleport circle: touching it carries a player to the linked circle.
-local pad = script.Parent
-local busy = {}
-pad.Touched:Connect(function(hit)
-	local character = hit.Parent
-	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or busy[character] then
-		return
-	end
-	local target = pad:GetAttribute("Target")
-	if typeof(target) ~= "Vector3" then
-		return
-	end
-	busy[character] = true
-	character:PivotTo(CFrame.new(target + Vector3.new(0, 5, 0)))
-	task.delay(2, function()
-		busy[character] = nil
-	end)
-end)
-]]
-
-local function teleportPad(parent, pos, target, color)
-	local pad = disc(parent, pos, 1, 16, color, M.Neon, NOSHADOW)
-	pad.Name = "TeleportCircle"
-	pad.Transparency = 0.25
-	pad:SetAttribute("Target", target)
-	Util.pointLight(pad, color, 2, 24)
-	Util.particles(pad, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(color),
-		Size = Util.ns(0, 0.8, 1, 0),
-		Lifetime = NumberRange.new(1.5, 2.5),
-		Rate = 25,
-		Speed = NumberRange.new(4, 8),
-		SpreadAngle = Vector2.new(10, 10),
-		EmissionDirection = Enum.NormalId.Right,
-		LightEmission = 1,
-	})
-	local s = Instance.new("Script")
-	s.Name = "Teleport"
-	s.Source = TELEPORT_SOURCE
-	s.Parent = pad
-	return pad
-end
-
--- Ring of beams (for the armillary sphere).
-local function ring(parent, center, radius, axisCF, thickness, color, material)
-	local seg = 28
-	for k = 0, seg - 1 do
-		local a0, a1 = k / seg * TAU, (k + 1) / seg * TAU
-		local p0 = center + axisCF:VectorToWorldSpace(Vector3.new(math.cos(a0) * radius, math.sin(a0) * radius, 0))
-		local p1 = center + axisCF:VectorToWorldSpace(Vector3.new(math.cos(a1) * radius, math.sin(a1) * radius, 0))
-		beam(parent, p0, p1, thickness, thickness, color, material, NOCOL_NOSHADOW)
-	end
-end
-
--- Watchtower --------------------------------------------------------------------------------------
-local function buildWatchtower(parent, rng)
-	local m = Util.model(parent, "StarwardenWatchtower")
-	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
-	local g = Landscape.WatchtowerHeight
-	local C = Vector3.new(L.Watchtower.X, g, L.Watchtower.Z)
-	local toCenter = Vector3.new(-C.X, 0, -C.Z).Unit
-
-	-- stepped foundation
-	disc(m, C + Vector3.new(0, -8, 0), 24, 320, STONE_DARK, M.Sandstone)
-	disc(m, C + Vector3.new(0, -2, 0), 24, 276, STONE, M.Limestone)
-	disc(m, C + Vector3.new(0, 4, 0), 24, 236, STONE_ALT, M.Limestone)
-	disc(m, C + Vector3.new(0, 16.2, 0), 0.6, 238, GOLD, M.Foil, NOSHADOW)
-	for k = 0, 2 do
-		local r0 = 118 + k * 21
-		local p = C + toCenter * (r0 + 10)
-		box(m, flatCF(Vector3.new(p.X, g + 13 - k * 6 - 6, p.Z), toCenter), Vector3.new(60, 12, 22), STONE, M.Limestone)
-	end
-
-	-- seven buttresses and guardian pillars
-	for k = 0, 6 do
-		local a = k / 7 * TAU + math.atan2(toCenter.Z, toCenter.X) + TAU / 14
-		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
-		local c = C + dir * 118 + Vector3.new(0, 16 + 35, 0)
-		wedge(m, flatCF(c, dir), Vector3.new(18, 70, 56), STONE_ALT, M.Limestone)
-		local pillarBase = ground(C + dir * 150)
-		column(m, pillarBase - Vector3.new(0, 4, 0), 64, 11, STONE, M.Limestone)
-		box(m, CFrame.new(pillarBase + Vector3.new(0, 61, 0)), Vector3.new(14, 3, 14), STONE_DARK, M.Sandstone)
-		local star = box(m, CFrame.new(pillarBase + Vector3.new(0, 68, 0)) * CFrame.Angles(math.pi / 4, 0, math.pi / 4), Vector3.new(5, 5, 5), STARLIGHT, M.Neon, NOCOL_NOSHADOW)
-		Util.pointLight(star, STARLIGHT, 1.5, 34)
-	end
-
-	-- the seven tiers
-	local y = g + 16
-	for i = 0, 6 do
-		local r = 88 - i * 8
-		local h = 70 - i * 3
-		local base = C + Vector3.new(0, y - C.Y, 0)
-		column(m, base, h, r * 2, i % 2 == 0 and STONE or STONE_ALT, M.Limestone)
-		for k = 0, 6 do
-			local a = k / 7 * TAU + i * 0.22
-			local dir = Vector3.new(math.cos(a), 0, math.sin(a))
-			box(m, flatCF(base + dir * (r - 0.6) + Vector3.new(0, h / 2, 0), dir), Vector3.new(5, h, 4), STONE_DARK, M.Sandstone)
-			local a2 = a + TAU / 14
-			local dir2 = Vector3.new(math.cos(a2), 0, math.sin(a2))
-			box(m, flatCF(base + dir2 * (r + 0.1) + Vector3.new(0, h * 0.55, 0), dir2), Vector3.new(2.4, h * 0.4, 0.8), STARLIGHT, M.Neon, NOCOL_NOSHADOW)
-		end
-		disc(m, base + Vector3.new(0, h, 0), 4, r * 2 + 10, STONE_DARK, M.Sandstone)
-		disc(m, base + Vector3.new(0, h + 2.2, 0), 0.6, r * 2 + 6, GOLD, M.Foil, NOSHADOW)
-		if i % 2 == 1 then
-			disc(m, base + Vector3.new(0, h - 4, 0), 2, r * 2 + 26, STONE, M.Limestone)
-		end
-		y += h
-	end
-
-	-- grand door facing the island center
-	local doorCF = flatCF(C + toCenter * 87.5 + Vector3.new(0, 16, 0), toCenter)
-	box(m, doorCF * CFrame.new(0, 17, 0), Vector3.new(22, 34, 1.2), rgb(40, 30, 26), M.Wood)
-	Util.cylinder(m, doorCF * CFrame.new(0, 34, 0) * CFrame.Angles(0, HALF_PI, 0), 1.2, 22, rgb(40, 30, 26), M.Wood)
-	box(m, doorCF * CFrame.new(-12, 18, -0.6), Vector3.new(2.4, 38, 1.6), GOLD, M.Foil, NOSHADOW)
-	box(m, doorCF * CFrame.new(12, 18, -0.6), Vector3.new(2.4, 38, 1.6), GOLD, M.Foil, NOSHADOW)
-
-	-- observatory on top
-	local top = C + Vector3.new(0, y - C.Y, 0)
-	disc(m, top + Vector3.new(0, 2, 0), 4, 124, STONE_DARK, M.Sandstone)
-	for k = 0, 27 do
-		local a = k / 28 * TAU
-		box(m, CFrame.new(top + Vector3.new(math.cos(a) * 60, 7, math.sin(a) * 60)), Vector3.new(2, 6, 2), STONE, M.Limestone, NOSHADOW)
-	end
-	for k = 0, 6 do
-		local a = k / 7 * TAU
-		column(m, top + Vector3.new(math.cos(a) * 44, 4, math.sin(a) * 44), 40, 7, STONE, M.Marble)
-	end
-	disc(m, top + Vector3.new(0, 46, 0), 4, 104, STONE_DARK, M.Sandstone)
-	ball(m, top + Vector3.new(0, 47, 0), 76, rgb(240, 236, 226), M.Marble)
-	disc(m, top + Vector3.new(0, 62, 0), 1.2, 69.8, GOLD, M.Foil, NOSHADOW)
-
-	-- armillary sphere around a captive star
-	local core = top + Vector3.new(0, 140, 0)
-	rod(m, top + Vector3.new(0, 84, 0), core - Vector3.new(0, 18, 0), 3, GOLD, M.Foil)
-	ring(m, core, 44, CFrame.new(), 2.2, GOLD, M.Foil)
-	ring(m, core, 40, CFrame.Angles(HALF_PI, 0, 0), 2.2, GOLD, M.Foil)
-	ring(m, core, 36, CFrame.Angles(HALF_PI, 0.8, 0) * CFrame.Angles(0, 0, 0.5), 2, STARLIGHT, M.Neon)
-	local star = ball(m, core, 18, rgb(230, 244, 255), M.Neon, NOCOL_NOSHADOW)
-	Util.pointLight(star, STARLIGHT, 4, 60, false)
-	Util.particles(star, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(200, 230, 255), rgb(255, 230, 160)),
-		Size = Util.ns(0, 2.5, 1, 0),
-		Lifetime = NumberRange.new(2, 4),
-		Rate = 30,
-		Speed = NumberRange.new(4, 10),
-		SpreadAngle = Vector2.new(180, 180),
-		LightEmission = 1,
-	})
-	local beamPart = Util.cylinder(m, CFrame.new(core + Vector3.new(0, 1000, 0)) * CFrame.Angles(0, 0, HALF_PI), 1980, 5, rgb(200, 230, 255), M.Neon, NOCOL_NOSHADOW)
-	beamPart.Transparency = 0.55
-	beamPart.CanQuery = false
-	beamPart.Name = "LightPillar"
-
-	-- teleport circles between the door and the observatory
-	-- (each circle drops you a little away from the other one so you don't bounce straight back)
-	local side = Vector3.new(-toCenter.Z, 0, toCenter.X)
-	local bottomPad = C + toCenter * 106 + Vector3.new(0, 16.6, 0)
-	local topPad = top + Vector3.new(0, 4.6, 0) + toCenter * 52
-	teleportPad(m, bottomPad, top + Vector3.new(0, 4.6, 0) + side * 52, STARLIGHT)
-	teleportPad(m, topPad, bottomPad + toCenter * 14, rgb(255, 220, 150))
-	return m
 end
 
 -- Colossal buried statue and hand --------------------------------------------------------------------
@@ -3127,7 +3393,8 @@ end
 ---------------------------------------------------------------------------------------------------------
 function Dunes.Build(folder, rng)
 	Util.log("Building Sea of Whispering Dunes...")
-	buildWatchtower(folder, rng)
+	local towerBase = Vector3.new(L.Watchtower.X, Landscape.WatchtowerHeight, L.Watchtower.Z)
+	Watchtower.Build(folder, towerBase, -towerBase)
 
 	local tower = L.Watchtower
 	local function spot(minR, maxR, clear)
@@ -3188,7 +3455,7 @@ return Dunes
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000B">
+			<Item class="ModuleScript" referent="RBX0000000C">
 				<Properties>
 					<string name="Name">Forest</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -3773,7 +4040,7 @@ return Forest
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000C">
+			<Item class="ModuleScript" referent="RBX0000000D">
 				<Properties>
 					<string name="Name">Hollow</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -4044,7 +4311,7 @@ return Hollow
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000D">
+			<Item class="ModuleScript" referent="RBX0000000E">
 				<Properties>
 					<string name="Name">Hub</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -4740,7 +5007,7 @@ return Hub
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000E">
+			<Item class="ModuleScript" referent="RBX0000000F">
 				<Properties>
 					<string name="Name">Ruins</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -5024,7 +5291,132 @@ return Ruins
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000F">
+			<Item class="ModuleScript" referent="RBX00000010">
+				<Properties>
+					<string name="Name">Sky</string>
+					<ProtectedString name="Source"><![CDATA[--[[
+	Sky
+	Puffy clouds placed by hand-picked rules: a sea of clouds wrapping the
+	watchtower just below its crown, drifting clouds high over the island,
+	mist clinging to the temple mountain and the snowy valleys, morning mist
+	over Mirror Lake and heavy ash clouds over the ruined city.
+	The Hollow Expanse is left clear so its moon and stars stay visible.
+]]
+
+local Layout = require(script.Parent.Parent.IslandLayout)
+local Landscape = require(script.Parent.Parent.Landscape)
+local Util = require(script.Parent.Parent.Util)
+
+local Sky = {}
+
+local M = Enum.Material
+local rgb = Color3.fromRGB
+local TAU = math.pi * 2
+local L = Layout.Landmarks
+
+local WHITE = rgb(252, 252, 255)
+local ASH = rgb(78, 74, 76)
+
+-- One cloud: a flat base with rounder puffs piled on top.
+local function cloud(parent, rng, center, size, color, transparency)
+	local m = Util.model(parent, "Cloud")
+	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	local cf = CFrame.new(center) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0)
+	local opts = { collide = false, shadow = false, transparency = transparency }
+	local base = Util.ellipsoid(m, cf * CFrame.new(0, -size * 0.12, 0), Vector3.new(size * 3.2, size * 0.55, size * 1.9), color, M.SmoothPlastic, opts)
+	base.CanQuery = false
+	for _ = 1, rng:NextInteger(6, 10) do
+		local off = Vector3.new(rng:NextNumber(-1.3, 1.3), rng:NextNumber(-0.05, 0.4), rng:NextNumber(-0.7, 0.7)) * size
+		local k = rng:NextNumber(0.5, 1) * size
+		local puff = Util.ellipsoid(m, cf * CFrame.new(off), Vector3.new(k * 2, k * 1.3, k * 2 * rng:NextNumber(0.8, 1.1)), color, M.SmoothPlastic, opts)
+		puff.CanQuery = false
+	end
+	return m
+end
+Sky.cloud = cloud
+
+local function around(rng, center, minR, maxR)
+	local a = rng:NextNumber(0, TAU)
+	local r = rng:NextNumber(minR, maxR)
+	return Vector3.new(center.X + math.cos(a) * r, 0, center.Z + math.sin(a) * r)
+end
+
+function Sky.Build(folder, rng)
+	Util.log("Adding clouds...")
+	local count = 0
+
+	-- sea of clouds around the watchtower, just under the crown
+	local tower = Util.model(folder, "WatchtowerCloudSea")
+	for _ = 1, 24 do
+		local p = around(rng, L.Watchtower, 170, 820)
+		cloud(tower, rng, p + Vector3.new(0, Landscape.WatchtowerHeight + rng:NextNumber(540, 625), 0), rng:NextNumber(45, 90), WHITE, 0.08)
+		count += 1
+	end
+
+	-- high drifting clouds over the island (none over the Hollow's night sky)
+	local high = Util.model(folder, "HighClouds")
+	local R = Layout.ISLAND_RADIUS
+	local placed = 0
+	for _ = 1, 200 do
+		if placed >= 46 then
+			break
+		end
+		local p = around(rng, Vector3.zero, 0, R * 1.02)
+		if Layout.getZone(p.X, p.Z) ~= "Hollow" and (p - L.Watchtower).Magnitude > 900 then
+			cloud(high, rng, p + Vector3.new(0, rng:NextNumber(780, 1100), 0), rng:NextNumber(60, 120), WHITE, 0.1)
+			placed += 1
+		end
+	end
+	count += placed
+
+	-- mist wrapped around the temple mountain
+	local temple = Util.model(folder, "TempleMist")
+	for _ = 1, 10 do
+		local p = around(rng, L.Temple, 300, 580)
+		local h = math.max(Landscape.heightAt(p.X, p.Z), Landscape.TempleHeight - 110)
+		cloud(temple, rng, p + Vector3.new(0, h + rng:NextNumber(10, 40), 0), rng:NextNumber(40, 70), WHITE, 0.25)
+		count += 1
+	end
+
+	-- low clouds drifting through the snowy valleys
+	local valley = Util.model(folder, "ValleyMist")
+	local valleyPlaced = 0
+	for _ = 1, 80 do
+		if valleyPlaced >= 8 then
+			break
+		end
+		local a = Layout.ZoneAngle.Snow + rng:NextNumber(-0.8, 0.8) * Layout.HALF_SECTOR
+		local p = Layout.polar(a, rng:NextNumber(R * 0.35, R * 0.85))
+		if (p - L.SnowVillage).Magnitude > 500 and (p - L.Temple).Magnitude > 700 then
+			cloud(valley, rng, p + Vector3.new(0, Landscape.heightAt(p.X, p.Z) + rng:NextNumber(70, 130), 0), rng:NextNumber(45, 80), WHITE, 0.3)
+			valleyPlaced += 1
+		end
+	end
+	count += valleyPlaced
+
+	-- morning mist over Mirror Lake
+	local lake = Util.model(folder, "LakeMist")
+	for _ = 1, 4 do
+		local p = around(rng, L.ForestLake, 0, 220)
+		cloud(lake, rng, p + Vector3.new(0, Landscape.ForestLakeLevel + rng:NextNumber(20, 40), 0), rng:NextNumber(26, 40), WHITE, 0.45)
+		count += 1
+	end
+
+	-- heavy ash clouds over the ruined city
+	local ash = Util.model(folder, "AshClouds")
+	for _ = 1, 14 do
+		local p = around(rng, L.RuinsCenter, 0, 2100)
+		cloud(ash, rng, p + Vector3.new(0, rng:NextNumber(380, 520), 0), rng:NextNumber(70, 120), Util.vary(rng, ASH, 0.12), 0.12)
+		count += 1
+	end
+	Util.log(string.format("  %d clouds", count))
+end
+
+return Sky
+]]></ProtectedString>
+				</Properties>
+			</Item>
+			<Item class="ModuleScript" referent="RBX00000011">
 				<Properties>
 					<string name="Name">Snow</string>
 					<ProtectedString name="Source"><![CDATA[--[[
