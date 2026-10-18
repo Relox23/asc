@@ -57,7 +57,12 @@ local function setupStreaming()
 	end
 	local ok, err = pcall(function()
 		workspace.StreamingEnabled = true
+	end)
+	-- newer Studio versions renamed or removed the radius settings; they are optional
+	pcall(function()
 		workspace.StreamingMinRadius = 256
+	end)
+	pcall(function()
 		workspace.StreamingTargetRadius = 2048
 	end)
 	if not ok then
