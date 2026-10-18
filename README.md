@@ -36,21 +36,23 @@ design that only borrows the feel of the places it was inspired by.
 1. Download **[`dist/IslandMapGenerator.rbxmx`](dist/IslandMapGenerator.rbxmx)**
    and **[`assets/IslandAssets.fbx`](assets/IslandAssets.fbx)**.
 2. Open your place in Roblox Studio (edit mode, **not** while playtesting).
-3. **Import the meshes:** **Home → Import 3D** (or File → Import 3D), pick
-   `IslandAssets.fbx`, keep the default settings and click **Import**. If the
-   importer shows a *Merge Meshes* option, leave it off. You get a model named
-   **`IslandAssets`** in Workspace; keep that name. (You can skip this step:
-   the generator then builds everything from plain parts, which works but
-   looks much simpler.)
+3. **Import the meshes:** **File → Import** (older Studio: **Home → Import 3D**),
+   pick `IslandAssets.fbx`, keep the default settings and click **Import**:
+   *Scale Unit* stays **Studs** and *Merge Meshes* stays off. You can also
+   tick *Anchored*. The models arrive at 1/10 of their real size (the
+   generator scales them up). You get a model named **`IslandAssets`** in
+   Workspace; keep that name. (You can skip this step: the generator then
+   builds everything from plain parts, which works but looks much simpler.)
 4. In the Explorer, right-click **ServerStorage → Insert from File…** and pick
    `IslandMapGenerator.rbxmx`.
-5. Open **View → Command Bar** and run:
+5. Open the **Command Bar** (**Ctrl+9**, or **Window → Script → Command Bar**;
+   older Studio: **View → Command Bar**) and run:
 
    ```lua
    require(game.ServerStorage.IslandMapGenerator).Build()
    ```
 
-6. Watch the **Output** window. It says `Using 50 detailed models from the
+6. Watch the **Output** window (**Window → Output**; older Studio: **View → Output**). It says `Using 50 detailed models from the
    imported IslandAssets model` when it found the meshes. Terrain takes the
    longest (progress is printed every 5%). Wait for `[IslandMap] Done`.
    Expect a few minutes.

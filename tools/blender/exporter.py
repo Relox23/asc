@@ -13,6 +13,11 @@ def export(objects, base_path, save_blend=True):
     for o in bpy.data.objects:
         o.select_set(o in objects)
     bpy.context.view_layer.objects.active = objects[0]
+    # Studio's importer reads FBX coordinates as studs ("Scale Unit: Studs") and
+    # ignores the file's unit, so keep the unit in the FBX header ("FBX Units
+    # Scale", as Roblox recommends) instead of multiplying everything by 100 for
+    # centimetres. The scale and Y-up conversion are baked into the vertices, so
+    # the file holds plain meshes at EXPORT_SCALE studs per stud.
     bpy.ops.export_scene.fbx(
         filepath=base_path + ".fbx",
         use_selection=True,
@@ -20,6 +25,8 @@ def export(objects, base_path, save_blend=True):
         axis_forward="-Z",
         axis_up="Y",
         apply_unit_scale=True,
+        apply_scale_options="FBX_SCALE_UNITS",
+        bake_space_transform=True,
         global_scale=kit.EXPORT_SCALE,
         mesh_smooth_type="OFF",
     )
