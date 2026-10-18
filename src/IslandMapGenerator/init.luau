@@ -8,6 +8,9 @@
 	         require(game.ServerStorage.IslandMapGenerator).Build()
 	  3. Wait for "[IslandMap] Done" in the Output window (a few minutes).
 
+	For the detailed buildings and trees, first import assets/IslandAssets.fbx
+	(Home > Import 3D) and keep the imported model named "IslandAssets".
+
 	Rebuild only some parts:
 	         require(game.ServerStorage.IslandMapGenerator).Build({ "Snow", "Atmosphere" })
 	Remove everything it made:
@@ -20,6 +23,7 @@ local Landscape = require(script.Landscape)
 local TerrainWriter = require(script.TerrainWriter)
 local Atmosphere = require(script.Atmosphere)
 local Util = require(script.Util)
+local AssetLibrary = require(script.AssetLibrary)
 
 local Generator = {}
 
@@ -79,6 +83,10 @@ function Generator.Build(steps)
 	end
 
 	Util.log(string.format("Building island (radius %d studs)...", Layout.ISLAND_RADIUS))
+	AssetLibrary.reset() -- pick up a freshly imported IslandAssets model
+	if not AssetLibrary.available() then
+		Util.log("No " .. AssetLibrary.IMPORT_NAME .. " model found; building everything from parts (see README to import the detailed meshes)")
+	end
 	Landscape.init()
 	removeDefaults()
 	local island = islandFolder()

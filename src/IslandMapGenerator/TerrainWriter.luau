@@ -8,6 +8,7 @@
 local Layout = require(script.Parent.IslandLayout)
 local Landscape = require(script.Parent.Landscape)
 local Util = require(script.Parent.Util)
+local Waterworks = require(script.Parent.Waterworks)
 
 local TerrainWriter = {}
 
@@ -208,6 +209,8 @@ function TerrainWriter.Generate()
 			Util.log(string.format("Terrain %d%% (%d island chunks, %.0fs)", pct, landChunks, os.clock() - started))
 		end
 	end
+	-- fountains, pools and the waterfall are terrain water too
+	Waterworks.Build()
 end
 
 -- Terrain shapes added on top of the base landscape -----------------------------

@@ -10,6 +10,8 @@ local Landscape = require(script.Parent.Parent.Landscape)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
+local Waterworks = require(script.Parent.Parent.Waterworks)
 
 local Hub = {}
 
@@ -100,9 +102,20 @@ end
 
 -- Palace ------------------------------------------------------------------------------------
 local function buildPalace(parent)
-	local m = Util.model(parent, "SunThronePalace")
 	local front = Layout.zoneDirection("Forest")
 	local P = flatCF(Vector3.new(0, TIER2_TOP, 0), front) -- local -Z faces the Forest avenue
+	local mesh = AssetLibrary.place("Palace", parent, P)
+	if mesh then
+		mesh.Name = "SunThronePalace"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for _, x in ipairs({ -14, 14 }) do
+			Props.torch(mesh, (P * CFrame.new(x, 0, -52)).Position, 8)
+		end
+		local crown = AssetLibrary.anchor(mesh, P, Vector3.new(0, 6, 136), "CrownLight")
+		Util.pointLight(crown, rgb(255, 210, 130), 2, 40)
+		return mesh
+	end
+	local m = Util.model(parent, "SunThronePalace")
 
 	local function at(x, y, z)
 		return P * CFrame.new(x, y, z)
@@ -218,11 +231,19 @@ end
 
 -- Sun-clock spire ------------------------------------------------------------------------------
 local function buildClockSpire(parent)
-	local m = Util.model(parent, "SunClockSpire")
 	local a = Layout.ZoneAngle.Forest + TAU / 10
 	local base = Vector3.new(math.cos(a) * 186, TIER1_TOP, math.sin(a) * 186)
 	local face = Vector3.new(-math.cos(a), 0, -math.sin(a))
 	local cf = flatCF(base, -face)
+	local mesh = AssetLibrary.place("ClockSpire", parent, cf)
+	if mesh then
+		mesh.Name = "SunClockSpire"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		local bell = AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 165), "BellLight")
+		Util.pointLight(bell, rgb(255, 200, 120), 1.5, 34)
+		return mesh, base
+	end
+	local m = Util.model(parent, "SunClockSpire")
 
 	box(m, cf * CFrame.new(0, 3, 0), Vector3.new(32, 6, 32), STONE_DARK, M.Sandstone)
 	box(m, cf * CFrame.new(0, 66, 0), Vector3.new(24, 120, 24), STONE, M.Limestone)
@@ -378,28 +399,75 @@ local function house(parent, rng, cf, w, d)
 end
 
 -- Plaza with fountain and market stalls ------------------------------------------------------------
-local function fountain(parent, pos)
-	local m = Util.model(parent, "Fountain")
-	disc(m, pos + Vector3.new(0, 1.5, 0), 3.4, 30, STONE, M.Limestone)
-	disc(m, pos + Vector3.new(0, 3.3, 0), 0.6, 31, STONE_DARK, M.Sandstone, NOSHADOW)
-	disc(m, pos + Vector3.new(0, 3.1, 0), 0.6, 27, rgb(70, 170, 200), M.Glass, { transparency = 0.25, reflectance = 0.3, shadow = false })
-	column(m, pos, 9, 4, STONE, M.Limestone)
-	disc(m, pos + Vector3.new(0, 9, 0), 1.4, 12, STONE_DARK, M.Sandstone)
-	disc(m, pos + Vector3.new(0, 9.6, 0), 0.4, 10.4, rgb(70, 170, 200), M.Glass, { transparency = 0.25, reflectance = 0.3, shadow = false })
-	local spout = ball(m, pos + Vector3.new(0, 12, 0), 2.4, GOLD, M.Foil)
-	Util.particles(spout, {
+local function waterJet(parent, pos, dir, rate, speed)
+	local p = box(parent, CFrame.lookAt(pos, pos + dir), Vector3.new(0.6, 0.6, 0.6), GOLD, M.SmoothPlastic, { collide = false, shadow = false, transparency = 1 })
+	p.Name = "WaterJet"
+	p.CanQuery = false
+	Util.particles(p, {
 		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(200, 236, 255), rgb(120, 200, 240)),
-		Size = Util.ns(0, 0.5, 1, 0.2),
+		Color = Util.cs(rgb(210, 240, 255), rgb(130, 205, 240)),
+		Size = Util.ns(0, 0.45, 1, 0.2),
 		Transparency = Util.ns(0, 0.1, 1, 0.8),
-		Lifetime = NumberRange.new(1.2, 1.6),
-		Rate = 70,
-		Speed = NumberRange.new(10, 13),
-		SpreadAngle = Vector2.new(14, 14),
-		Acceleration = Vector3.new(0, -26, 0),
-		EmissionDirection = Enum.NormalId.Top,
+		Lifetime = NumberRange.new(0.7, 1.4),
+		Rate = rate,
+		Speed = NumberRange.new(speed * 0.85, speed),
+		SpreadAngle = Vector2.new(8, 8),
+		Acceleration = Vector3.new(0, -30, 0),
+		EmissionDirection = Enum.NormalId.Front,
 	})
+	return p
+end
+
+-- Fountain around one of Waterworks' grid-aligned basins (the water itself is terrain water).
+local function fountain(parent, center)
+	local base = Vector3.new(center.X, Waterworks.BASIN_TOP - 2, center.Z) -- water line sits 2 above the base
+	local m = AssetLibrary.place("Fountain", parent, CFrame.new(base))
+	local spout = base + Vector3.new(0, 13.6, 0)
+	if not m then
+		m = Util.model(parent, "Fountain")
+		local h, b = Waterworks.BASIN_HALF, Waterworks.BOWL_HALF
+		for _, s in ipairs({ -1, 1 }) do
+			box(m, CFrame.new(base + Vector3.new(0, 1.3, s * (h + 1.3))), Vector3.new(2 * h + 5.2, 4.6, 2.6), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(s * (h + 1.3), 1.3, 0)), Vector3.new(2.6, 4.6, 2 * h), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(0, 8.05, s * (b + 0.7))), Vector3.new(2 * b + 2.8, 5.1, 1.4), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(s * (b + 0.7), 8.05, 0)), Vector3.new(1.4, 5.1, 2 * b), STONE, M.Limestone)
+		end
+		box(m, CFrame.new(base + Vector3.new(0, -6.2, 0)), Vector3.new(2 * h, 0.4, 2 * h), TEAL, M.CeramicTiles, NOSHADOW)
+		column(m, base + Vector3.new(0, -6.4, 0), 12, 4, STONE, M.Limestone)
+		box(m, CFrame.new(base + Vector3.new(0, 5.7, 0)), Vector3.new(2 * b + 2.8, 0.6, 2 * b + 2.8), STONE_DARK, M.Sandstone)
+		ball(m, base + Vector3.new(0, 12, 0), 2.4, GOLD, M.Foil)
+		spout = base + Vector3.new(0, 12.4, 0)
+	end
+	m.Name = "Fountain"
+	waterJet(m, spout, Vector3.new(0, 1, 0), 70, 13)
+	for _, d in ipairs({ Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 0, -1) }) do
+		waterJet(m, base + d * 5.8 + Vector3.new(0, 8.6, 0), (d + Vector3.new(0, 0.3, 0)).Unit, 18, 6)
+	end
 	return m
+end
+
+-- Reflecting pools beside the palace approach (terrain water inside marble rims).
+local function buildPools(parent)
+	for _, pool in ipairs(Waterworks.palacePools()) do
+		local m = Util.model(parent, "ReflectingPool")
+		local mn, mx = pool.min, pool.max
+		local cx, cz = (mn.X + mx.X) / 2, (mn.Z + mx.Z) / 2
+		local sx, sz = mx.X - mn.X, mx.Z - mn.Z
+		local h = mx.Y + 1 - pool.floorY
+		local y = pool.floorY + h / 2
+		box(m, CFrame.new(cx, pool.floorY + 0.05, cz), Vector3.new(sx, 0.1, sz), TEAL, M.CeramicTiles, NOSHADOW)
+		box(m, CFrame.new(cx, y, mn.Z - 1), Vector3.new(sx + 4, h, 2), MARBLE, M.Marble)
+		box(m, CFrame.new(cx, y, mx.Z + 1), Vector3.new(sx + 4, h, 2), MARBLE, M.Marble)
+		box(m, CFrame.new(mn.X - 1, y, cz), Vector3.new(2, h, sz), MARBLE, M.Marble)
+		box(m, CFrame.new(mx.X + 1, y, cz), Vector3.new(2, h, sz), MARBLE, M.Marble)
+		local long = sx > sz and Vector3.new(1, 0, 0) or Vector3.new(0, 0, 1)
+		local len = math.max(sx, sz)
+		for k = 1, 3 do
+			local p = Vector3.new(cx, mx.Y - 0.3, cz) + long * (len * (k / 4 - 0.5))
+			ball(m, p, 1.4, GOLD, M.Foil)
+			waterJet(m, p + Vector3.new(0, 0.6, 0), Vector3.new(0, 1, 0), 30, 9)
+		end
+	end
 end
 
 local function stall(parent, rng, cf)
@@ -425,6 +493,26 @@ local function stall(parent, rng, cf)
 end
 
 -- Walls and gates --------------------------------------------------------------------------------------
+-- Dark slate plaque showing text on its front (-Z) face.
+local function namePlaque(parent, cf, text)
+	local plaque = box(parent, cf, Vector3.new(30, 6.4, 0.4), rgb(48, 40, 34), M.Slate, NOSHADOW)
+	plaque.Name = "NamePlaque"
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.CanvasSize = Vector2.new(720, 150)
+	gui.LightInfluence = 0.2
+	gui.Parent = plaque
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = rgb(240, 206, 120)
+	label.Font = Enum.Font.Garamond
+	label.TextScaled = true
+	label.Parent = gui
+	return plaque
+end
+
 local function buildWalls(parent)
 	local m = Util.model(parent, "CityWalls")
 	local segments = 84
@@ -453,7 +541,10 @@ local function buildWalls(parent)
 			for k = -1, 1, 2 do
 				box(m, cf * CFrame.new(5.5, wallH / 2 + 5, k * len / 4), Vector3.new(2.4, 5, len / 4), STONE, M.Sandstone, NOSHADOW)
 			end
-			if s % 7 == 3 and not inGate(a, 0.08) then
+			local towerBase = dir * (WALL_R + 3) + Vector3.new(0, TOP, 0)
+			if s % 7 == 3 and not inGate(a, 0.08) and AssetLibrary.place("WallTower", m, CFrame.lookAt(towerBase, towerBase + dir)) then
+				-- detailed tower mesh placed
+			elseif s % 7 == 3 and not inGate(a, 0.08) then
 				local base = dir * (WALL_R + 3) + Vector3.new(0, TOP - 4, 0)
 				column(m, base, wallH + 18, 26, STONE, M.Sandstone)
 				disc(m, base + Vector3.new(0, wallH + 18, 0), 2, 30, STONE_DARK, M.Sandstone)
@@ -467,8 +558,23 @@ local function buildWalls(parent)
 
 	-- the five gates
 	for _, av in ipairs(AVENUES) do
-		local gm = Util.model(m, "Gate_" .. av.id)
 		local color = GATE_COLORS[av.id]
+		local ground = av.dir * WALL_R + Vector3.new(0, TOP, 0)
+		local gateCF = CFrame.lookAt(ground, ground + av.dir) -- front faces out of the city
+		local mesh = AssetLibrary.place("CityGate", m, gateCF, 1, { Fabric = color })
+		if mesh then
+			mesh.Name = "Gate_" .. av.id
+			local name = string.upper(Layout.ZoneInfo[av.id].name)
+			namePlaque(mesh, gateCF * CFrame.new(AssetLibrary.fromBlender(0, -9.75, 45.2)), name)
+			namePlaque(mesh, gateCF * CFrame.new(AssetLibrary.fromBlender(0, 9.25, 45.2)) * CFrame.Angles(0, math.pi, 0), name)
+			for _, x in ipairs({ -38, 38 }) do
+				local fx = AssetLibrary.anchor(mesh, gateCF, Vector3.new(x, -19.5, 13.6), "Brazier")
+				Util.fire(fx, 4, 8)
+				Util.pointLight(fx, rgb(255, 160, 80), 2, 36)
+			end
+			continue
+		end
+		local gm = Util.model(m, "Gate_" .. av.id)
 		local dir = av.dir
 		local side = Vector3.new(-dir.Z, 0, dir.X)
 		local center = dir * WALL_R + Vector3.new(0, TOP - 4, 0)
@@ -498,25 +604,10 @@ local function buildWalls(parent)
 		box(gm, lintelCF, Vector3.new(14, 8, span + 18), STONE, M.Sandstone)
 		box(gm, lintelCF * CFrame.new(0, 4.6, 0), Vector3.new(15, 1.2, span + 20), GOLD, M.Foil, NOSHADOW)
 
-		-- plaque with the destination name, facing out of the city
-		local plaque = box(gm, CFrame.lookAt(archBase + dir * 7.2 + Vector3.new(0, 18, 0), archBase + dir * 20 + Vector3.new(0, 18, 0)), Vector3.new(36, 6, 0.6), rgb(48, 40, 34), M.Slate, NOSHADOW)
-		local gui = Instance.new("SurfaceGui")
-		gui.Face = Enum.NormalId.Front
-		gui.CanvasSize = Vector2.new(720, 120)
-		gui.LightInfluence = 0.2
-		gui.Parent = plaque
-		local label = Instance.new("TextLabel")
-		label.Size = UDim2.fromScale(1, 1)
-		label.BackgroundTransparency = 1
-		label.Text = string.upper(Layout.ZoneInfo[av.id].name)
-		label.TextColor3 = rgb(240, 206, 120)
-		label.Font = Enum.Font.Garamond
-		label.TextScaled = true
-		label.Parent = gui
-		-- the same name on the inside, facing the palace
-		local inner = plaque:Clone()
-		inner.CFrame = CFrame.lookAt(archBase - dir * 7.2 + Vector3.new(0, 18, 0), archBase - dir * 20 + Vector3.new(0, 18, 0))
-		inner.Parent = gm
+		-- plaque with the destination name, facing out of the city, and again facing the palace
+		local name = string.upper(Layout.ZoneInfo[av.id].name)
+		namePlaque(gm, CFrame.lookAt(archBase + dir * 7.2 + Vector3.new(0, 18, 0), archBase + dir * 20 + Vector3.new(0, 18, 0)), name)
+		namePlaque(gm, CFrame.lookAt(archBase - dir * 7.2 + Vector3.new(0, 18, 0), archBase - dir * 20 + Vector3.new(0, 18, 0)), name)
 
 		-- hanging banners in the region's colour
 		for _, s in ipairs({ -1, 1 }) do
@@ -592,6 +683,7 @@ end
 function Hub.Build(folder, rng)
 	Util.log("Building Solkhar (capital)...")
 	buildTiers(folder)
+	buildPools(folder)
 	buildPalace(folder)
 	local _, clockBase = buildClockSpire(folder)
 	buildWalls(folder)
@@ -602,16 +694,18 @@ function Hub.Build(folder, rng)
 	-- fountain plazas on each avenue
 	local plazas = {}
 	local market = Util.model(folder, "Markets")
-	for _, av in ipairs(AVENUES) do
-		local center = av.dir * 412
+	local fountainCenters = Waterworks.fountainCenters()
+	for i, av in ipairs(AVENUES) do
+		local c = fountainCenters[i]
+		local center = Vector3.new(c.X, 0, c.Z)
 		table.insert(plazas, center)
-		fountain(market, center + Vector3.new(0, TOP, 0))
+		fountain(market, c)
 		local side = Vector3.new(-av.dir.Z, 0, av.dir.X)
-		for k, off in ipairs({ { 30, -24 }, { 30, 24 }, { -30, -24 }, { -30, 24 } }) do
+		for _, off in ipairs({ { 30, -24 }, { 30, 24 }, { -30, -24 }, { -30, 24 } }) do
 			local pos = center + side * off[1] + av.dir * off[2] + Vector3.new(0, TOP, 0)
-			local face = (center + Vector3.new(0, TOP, 0) - pos)
-			if k <= 4 then
-				stall(market, rng, flatCF(pos, face))
+			local cf = flatCF(pos, center + Vector3.new(0, TOP, 0) - pos)
+			if not AssetLibrary.place("MarketStall", market, cf, 1, { Fabric = Util.pick(rng, CLOTH), Fabric2 = Util.pick(rng, CLOTH) }) then
+				stall(market, rng, cf)
 			end
 		end
 		for k = 0, 5 do
@@ -644,11 +738,18 @@ function Hub.Build(folder, rng)
 	-- houses in rings between the avenues
 	local houses = Util.model(folder, "Houses")
 	local count = 0
+	local houseKinds = AssetLibrary.has("House_A") and AssetLibrary.has("House_B") and AssetLibrary.has("House_C") and {
+		{ name = "House_A", w = 28 },
+		{ name = "House_B", w = 29 },
+		{ name = "House_C", w = 21 },
+	} or nil
 	for ringR = 322, WALL_R - 68, 42 do
 		local a = rng:NextNumber(0, 0.2)
 		while a < TAU do
-			local w = rng:NextNumber(20, 32)
-			local d = rng:NextNumber(20, 30)
+			local kind = houseKinds and Util.pick(rng, houseKinds)
+			local scale = kind and rng:NextNumber(0.88, 1.12) or 1
+			local w = kind and kind.w * scale or rng:NextNumber(20, 32)
+			local d = kind and 24 or rng:NextNumber(20, 30)
 			local center = Vector3.new(math.cos(a) * ringR, 0, math.sin(a) * ringR)
 			local blocked = nearAvenue(center, 26 + w / 2)
 				or (clockBase and (center - Vector3.new(clockBase.X, 0, clockBase.Z)).Magnitude < 40)
@@ -663,7 +764,14 @@ function Hub.Build(folder, rng)
 				else
 					local jitter = Vector3.new(rng:NextNumber(-3, 3), 0, rng:NextNumber(-3, 3))
 					local pos = center + jitter + Vector3.new(0, TOP, 0)
-					house(houses, rng, flatCF(pos, -center), w, d)
+					if kind then
+						AssetLibrary.place(kind.name, houses, flatCF(pos, -center), scale, {
+							Plaster = Util.pick(rng, HOUSE_COLORS),
+							Fabric = Util.pick(rng, CLOTH),
+						})
+					else
+						house(houses, rng, flatCF(pos, -center), w, d)
+					end
 					count += 1
 				end
 			end

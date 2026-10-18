@@ -6,6 +6,7 @@
 
 local Layout = require(script.Parent.IslandLayout)
 local Util = require(script.Parent.Util)
+local AssetLibrary = require(script.Parent.AssetLibrary)
 
 local Props = {}
 
@@ -41,7 +42,21 @@ function Props.randomTemplate(rng, list)
 end
 
 -- Palm tree ---------------------------------------------------------------------
+-- Every tree/plant list below prefers the detailed Blender meshes (in a few tints)
+-- and falls back to part-built versions when they aren't imported.
+local function tints(style, colors)
+	local list = {}
+	for _, c in ipairs(colors) do
+		table.insert(list, { [style] = c })
+	end
+	return list
+end
+
 function Props.palms()
+	local meshes = AssetLibrary.templates({ "Palm_A", "Palm_B" }, tints("Frond", { rgb(72, 134, 54), rgb(88, 148, 58), rgb(62, 120, 50) }))
+	if meshes then
+		return meshes
+	end
 	return variants("Palm", 5, 101, function(m, rng)
 		local H = rng:NextNumber(26, 36)
 		local lean = rng:NextNumber(3, 9)
@@ -114,39 +129,64 @@ local function canopyTree(m, rng, leafColors, H, trunkD, puffs, puffSize)
 end
 
 function Props.forestTrees()
+	local meshes = AssetLibrary.templates({ "Broadleaf_A", "Broadleaf_B", "Broadleaf_C" }, tints("Leaves", { FOREST_LEAVES[1], FOREST_LEAVES[2], FOREST_LEAVES[5] }))
+	if meshes then
+		return meshes
+	end
 	return variants("WildwoodTree", 8, 202, function(m, rng)
 		canopyTree(m, rng, FOREST_LEAVES, rng:NextNumber(24, 36), rng:NextNumber(2.6, 3.8), 5, rng:NextNumber(15, 21))
 	end)
 end
 
+-- Petals drifting down from a blossom tree's canopy.
+local function addPetals(m, color, height)
+	if m:FindFirstChild("Petals") then
+		return -- templates are shared, add this once
+	end
+	local glow = box(m, CFrame.new(0, height, 0), Vector3.new(1, 1, 1), color, M.SmoothPlastic, {
+		collide = false,
+		shadow = false,
+		transparency = 1,
+	})
+	glow.Name = "Petals"
+	Util.particles(glow, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(color),
+		Size = Util.ns(0, 0.5, 1, 0.3),
+		Transparency = Util.ns(0, 0.2, 1, 1),
+		Lifetime = NumberRange.new(5, 8),
+		Rate = 2,
+		Speed = NumberRange.new(0.5, 1.5),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0.6, -1.2, 0.3),
+		Rotation = NumberRange.new(0, 360),
+		RotSpeed = NumberRange.new(-40, 40),
+		Shape = Enum.ParticleEmitterShape.Sphere,
+	})
+end
+
 function Props.blossomTrees()
+	local meshes = AssetLibrary.templates({ "Blossom_A", "Blossom_B" }, tints("Blossom", BLOSSOMS))
+	if meshes then
+		for _, t in ipairs(meshes) do
+			local blossom = AssetLibrary.piece(t, "Blossom")
+			addPetals(t, blossom and blossom.Color or BLOSSOMS[1], 18)
+		end
+		return meshes
+	end
 	return variants("BlossomTree", 4, 203, function(m, rng, i)
 		local petals = { BLOSSOMS[(i - 1) % #BLOSSOMS + 1] }
 		canopyTree(m, rng, petals, rng:NextNumber(20, 28), rng:NextNumber(2.4, 3.2), 5, rng:NextNumber(13, 18))
-		local glow = box(m, CFrame.new(0, 24, 0), Vector3.new(1, 1, 1), petals[1], M.SmoothPlastic, {
-			collide = false,
-			shadow = false,
-			transparency = 1,
-		})
-		Util.particles(glow, {
-			Texture = Util.TEX.sparkle,
-			Color = Util.cs(petals[1]),
-			Size = Util.ns(0, 0.5, 1, 0.3),
-			Transparency = Util.ns(0, 0.2, 1, 1),
-			Lifetime = NumberRange.new(5, 8),
-			Rate = 2,
-			Speed = NumberRange.new(0.5, 1.5),
-			SpreadAngle = Vector2.new(180, 180),
-			Acceleration = Vector3.new(0.6, -1.2, 0.3),
-			Rotation = NumberRange.new(0, 360),
-			RotSpeed = NumberRange.new(-40, 40),
-			Shape = Enum.ParticleEmitterShape.Sphere,
-		})
+		addPetals(m, petals[1], 24)
 	end)
 end
 
 -- Slender pale-barked trees
 function Props.slenderTrees()
+	local meshes = AssetLibrary.templates({ "SilverTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("SilverTree", 3, 204, function(m, rng)
 		local H = rng:NextNumber(34, 46)
 		local bark = rgb(226, 222, 210)
@@ -164,6 +204,10 @@ end
 
 -- Rare giant trees with hanging vines and glowing mushrooms
 function Props.ancientTrees()
+	local meshes = AssetLibrary.templates({ "AncientTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("AncientTree", 3, 205, function(m, rng)
 		local H = rng:NextNumber(70, 92)
 		local D = rng:NextNumber(13, 17)
@@ -226,6 +270,10 @@ local function pineTier(m, y, radius, height, color, material, turn)
 end
 
 function Props.pines()
+	local meshes = AssetLibrary.templates({ "Pine_A", "Pine_B", "Pine_C" })
+	if meshes then
+		return meshes
+	end
 	return variants("SnowPine", 8, 301, function(m, rng, i)
 		local H = rng:NextNumber(38, 62)
 		local bark = rgb(74, 56, 44)
@@ -250,6 +298,10 @@ end
 
 -- Bare winter tree (no leaves), used around the village and temple.
 function Props.bareTrees()
+	local meshes = AssetLibrary.templates({ "BareTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("BareTree", 3, 302, function(m, rng)
 		local bark = rgb(60, 48, 42)
 		local function branch(from, dir, len, d, depth)
@@ -270,6 +322,10 @@ end
 
 -- Crystal-white dead trees of the Hollow Expanse
 function Props.quartzTrees()
+	local meshes = AssetLibrary.templates({ "QuartzTree_A", "QuartzTree_B" })
+	if meshes then
+		return meshes
+	end
 	return variants("QuartzTree", 6, 401, function(m, rng)
 		local color = rgb(236, 240, 246)
 		local function branch(from, dir, len, d, depth)
@@ -290,6 +346,10 @@ end
 
 -- Bushes --------------------------------------------------------------------------------
 function Props.bushes()
+	local meshes = AssetLibrary.templates({ "Bush_A", "Bush_B" }, tints("Leaves", { FOREST_LEAVES[1], FOREST_LEAVES[3], FOREST_LEAVES[4] }))
+	if meshes then
+		return meshes
+	end
 	return variants("Bush", 6, 501, function(m, rng, i)
 		local leaf = Util.vary(rng, FOREST_LEAVES[(i - 1) % #FOREST_LEAVES + 1], 0.08)
 		for b = 1, rng:NextInteger(2, 3) do
@@ -309,9 +369,22 @@ end
 
 -- Japanese stone lantern (toro). position is the ground point.
 function Props.stoneLantern(parent, position, yaw, snowy)
+	local cf = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
+	local mesh = AssetLibrary.place("StoneLantern", parent, cf)
+	if mesh then
+		local fx = AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 7.8), "Light")
+		Util.pointLight(fx, rgb(255, 178, 96), 1.4, 22, false)
+		if not snowy then
+			for _, p in ipairs(mesh:GetChildren()) do
+				if p:GetAttribute("Style") == "Snow" then
+					p:Destroy()
+				end
+			end
+		end
+		return mesh
+	end
 	local m = Util.model(parent, "StoneLantern")
 	local stone = rgb(150, 148, 142)
-	local cf = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
 	box(m, cf * CFrame.new(0, 0.6, 0), Vector3.new(4.4, 1.2, 4.4), stone, M.Granite)
 	column(m, (cf * CFrame.new(0, 1.2, 0)).Position, 4.5, 1.8, stone, M.Granite)
 	box(m, cf * CFrame.new(0, 6, 0), Vector3.new(3.6, 0.8, 3.6), stone, M.Granite)
@@ -339,6 +412,13 @@ end
 -- Tall street lamp with a warm lantern.
 function Props.streetLamp(parent, position, height)
 	height = height or 14
+	local scale = height / 13.4
+	local mesh = AssetLibrary.place("StreetLamp", parent, CFrame.new(position), scale)
+	if mesh then
+		local fx = AssetLibrary.anchor(mesh, CFrame.new(position), Vector3.new(0, 0, 15.4), "Light")
+		Util.pointLight(fx, rgb(255, 196, 120), 1.5, 30, false)
+		return mesh
+	end
 	local m = Util.model(parent, "Lamp")
 	local metal = rgb(62, 56, 48)
 	column(m, position, height, 0.8, metal, M.Metal)
@@ -385,6 +465,10 @@ end
 
 -- Giant skeleton half buried in sand: spine, ribs and a horned skull.
 function Props.giantSkeleton(parent, rng, position, yaw, scale)
+	local mesh = AssetLibrary.place("Skeleton", parent, CFrame.new(position) * CFrame.Angles(0, yaw, 0), scale)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "AncientRemains")
 	local bone = rgb(232, 226, 208)
 	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
@@ -425,8 +509,12 @@ end
 -- Burnt-out car for the ruined city.
 local CAR_PAINT = { rgb(110, 58, 40), rgb(70, 70, 74), rgb(140, 128, 108), rgb(96, 40, 36), rgb(52, 64, 72), rgb(150, 120, 60) }
 function Props.wreckedCar(parent, rng, groundCF)
-	local m = Util.model(parent, "WreckedCar")
 	local paint = Util.vary(rng, Util.pick(rng, CAR_PAINT), 0.1)
+	local mesh = AssetLibrary.place(rng:NextNumber() < 0.6 and "Car_A" or "Car_B", parent, groundCF, 1, { Paint = paint })
+	if mesh then
+		return mesh
+	end
+	local m = Util.model(parent, "WreckedCar")
 	local rust = rgb(102, 62, 40)
 	local glass = rgb(20, 22, 26)
 	box(m, groundCF * CFrame.new(0, 2.4, 0), Vector3.new(7, 2.6, 15), paint, M.CorrodedMetal)

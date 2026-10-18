@@ -11,6 +11,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Coast = {}
 
@@ -57,7 +58,49 @@ local function iceChunks(parent, rng, pos)
 end
 
 -- Lighthouse --------------------------------------------------------------------------------------------
+local function lamp(part, seaDir)
+	local spot = Instance.new("SpotLight")
+	spot.Face = Enum.NormalId.Front
+	spot.Angle = 40
+	spot.Range = 60
+	spot.Brightness = 6
+	spot.Color = rgb(255, 236, 190)
+	spot.Parent = part
+	part.CFrame = CFrame.lookAt(part.Position, part.Position + seaDir)
+	Util.pointLight(part, rgb(255, 236, 190), 3, 60)
+end
+
+-- The mesh version stands on a rocky knoll; its keeper's cottage is 32 studs inland.
+local function lighthouseMesh(parent, rng, pos, seaDir)
+	if not AssetLibrary.has("Lighthouse") then
+		return nil
+	end
+	local probe = CFrame.lookAt(pos, pos + seaDir)
+	local house = (probe * CFrame.new(AssetLibrary.fromBlender(0, 32, 0))).Position
+	local houseGround = Landscape.heightAt(house.X, house.Z)
+	local y = math.max(pos.Y, houseGround)
+	local base = Vector3.new(pos.X, y, pos.Z)
+	local cf = CFrame.lookAt(base, base + seaDir)
+	local terrain = workspace.Terrain
+	TerrainWriter.boulder(rng, pos + Vector3.new(0, -4, 0), 22, M.Rock)
+	terrain:FillCylinder(CFrame.new(pos.X, (pos.Y + y) / 2 - 4, pos.Z), y - pos.Y + 8, 16, M.Rock)
+	if houseGround < y - 0.5 then
+		terrain:FillBlock(CFrame.new(house.X, (houseGround + y) / 2 - 2, house.Z) * cf.Rotation, Vector3.new(20, y - houseGround + 4, 16), M.Sand)
+	end
+	local m = AssetLibrary.place("Lighthouse", parent, cf)
+	m.Name = "OldLighthouse"
+	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	lamp(AssetLibrary.anchor(m, cf, Vector3.new(0, 0, 84.8), "Lamp"), seaDir)
+	local window = AssetLibrary.anchor(m, cf, Vector3.new(0, 25.6, 5.6), "WindowGlow")
+	Util.surfaceLight(window, Enum.NormalId.Front, rgb(255, 200, 130), 1, 12)
+	return m
+end
+
 local function lighthouse(parent, rng, pos, seaDir)
+	local mesh = lighthouseMesh(parent, rng, pos, seaDir)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "OldLighthouse")
 	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
 	TerrainWriter.boulder(rng, pos + Vector3.new(0, -4, 0), 22, M.Rock)
@@ -76,16 +119,7 @@ local function lighthouse(parent, rng, pos, seaDir)
 		box(m, CFrame.new(base + Vector3.new(math.cos(a) * 10.5, y + 2.5, math.sin(a) * 10.5)), Vector3.new(0.5, 3, 0.5), rgb(40, 40, 44), M.Metal, NOSHADOW)
 	end
 	column(m, base + Vector3.new(0, y + 1, 0), 10, 12, rgb(220, 240, 255), M.Glass, { transparency = 0.5, reflectance = 0.2 })
-	local lamp = ball(m, base + Vector3.new(0, y + 6, 0), 6, rgb(255, 240, 190), M.Neon, NOSHADOW)
-	local spot = Instance.new("SpotLight")
-	spot.Face = Enum.NormalId.Front
-	spot.Angle = 40
-	spot.Range = 60
-	spot.Brightness = 6
-	spot.Color = rgb(255, 236, 190)
-	spot.Parent = lamp
-	lamp.CFrame = CFrame.lookAt(lamp.Position, lamp.Position + seaDir)
-	Util.pointLight(lamp, rgb(255, 236, 190), 3, 60)
+	lamp(ball(m, base + Vector3.new(0, y + 6, 0), 6, rgb(255, 240, 190), M.Neon, NOSHADOW), seaDir)
 	disc(m, base + Vector3.new(0, y + 11.5, 0), 1.4, 16, red, M.Metal)
 	ball(m, base + Vector3.new(0, y + 12, 0), 10, red, M.Metal)
 	ball(m, base + Vector3.new(0, y + 17.6, 0), 1.6, rgb(40, 40, 44), M.Metal)
@@ -102,10 +136,28 @@ local function lighthouse(parent, rng, pos, seaDir)
 end
 
 -- Shipwreck ----------------------------------------------------------------------------------------------
+-- Crates washed up around the wreck, and a chest half in the sand.
+local function flotsam(m, rng, pos, seaDir)
+	for _ = 1, 5 do
+		local p = ground(pos + Vector3.new(rng:NextNumber(-40, 40), 0, rng:NextNumber(-40, 40)))
+		box(m, CFrame.new(p + Vector3.new(0, 1, 0)) * CFrame.Angles(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, TAU), 0), Vector3.new(3.4, 3.4, 3.4), rgb(140, 104, 66), M.WoodPlanks)
+	end
+	local chest = box(m, CFrame.new(ground(pos + seaDir * -24) + Vector3.new(0, 1.2, 0)), Vector3.new(4, 2.6, 2.6), rgb(110, 70, 40), M.WoodPlanks)
+	chest.Name = "Chest"
+	box(m, chest.CFrame * CFrame.new(0, 0.2, -1.35), Vector3.new(4.2, 0.4, 0.2), rgb(214, 172, 74), M.Foil, NOCOL_NOSHADOW)
+end
+
 local function shipwreck(parent, rng, pos, seaDir)
-	local m = Util.model(parent, "Shipwreck")
+	local along = Vector3.new(-seaDir.Z, 0, seaDir.X)
+	local mesh = AssetLibrary.place("Shipwreck", parent, CFrame.lookAt(pos - Vector3.new(0, 3, 0), pos - Vector3.new(0, 3, 0) + along) * CFrame.Angles(0, 0, 0.35))
+	local m = mesh or Util.model(parent, "Shipwreck")
+	m.Name = "Shipwreck"
+	if mesh then
+		flotsam(m, rng, pos, seaDir)
+		return m
+	end
 	local hull = rgb(92, 66, 46)
-	local cf = CFrame.lookAt(pos, pos + Vector3.new(-seaDir.Z, 0, seaDir.X)) * CFrame.Angles(0, 0, 0.35) * CFrame.new(0, 2, 0)
+	local cf = CFrame.lookAt(pos, pos + along) * CFrame.Angles(0, 0, 0.35) * CFrame.new(0, 2, 0)
 	box(m, cf * CFrame.new(0, 0, 0), Vector3.new(20, 3, 60), hull, M.WoodPlanks)
 	for _, s in ipairs({ -1, 1 }) do
 		box(m, cf * CFrame.new(s * 10, 5, 0) * CFrame.Angles(0, 0, s * 0.25), Vector3.new(2, 12, 58), hull, M.WoodPlanks)
@@ -123,13 +175,7 @@ local function shipwreck(parent, rng, pos, seaDir)
 	rod(m, (cf * CFrame.new(-12, 36, -5)).Position, (cf * CFrame.new(14, 38, -6)).Position, 1, rgb(80, 58, 40), M.Wood, NOSHADOW)
 	box(m, cf * CFrame.new(-2, 28, -5.3) * CFrame.Angles(0, 0, 0.08), Vector3.new(16, 14, 0.3), rgb(220, 210, 186), M.Fabric, NOCOL)
 	rod(m, (cf * CFrame.new(0, 8, 20)).Position, (cf * CFrame.new(16, -2, 34)).Position, 1.6, rgb(80, 58, 40), M.Wood)
-	for _ = 1, 5 do
-		local p = ground(pos + Vector3.new(rng:NextNumber(-40, 40), 0, rng:NextNumber(-40, 40)))
-		box(m, CFrame.new(p + Vector3.new(0, 1, 0)) * CFrame.Angles(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, TAU), 0), Vector3.new(3.4, 3.4, 3.4), rgb(140, 104, 66), M.WoodPlanks)
-	end
-	local chest = box(m, CFrame.new(ground(pos + seaDir * -24) + Vector3.new(0, 1.2, 0)), Vector3.new(4, 2.6, 2.6), rgb(110, 70, 40), M.WoodPlanks)
-	chest.Name = "Chest"
-	box(m, chest.CFrame * CFrame.new(0, 0.2, -1.35), Vector3.new(4.2, 0.4, 0.2), rgb(214, 172, 74), M.Foil, NOCOL_NOSHADOW)
+	flotsam(m, rng, pos, seaDir)
 	return m
 end
 

@@ -1,14 +1,21 @@
 -- Runs the full generator against the mock and prints statistics.
+-- Prepend the output of tests/library_fixture.py to test with the detailed meshes.
 local Gen = mockRequire(GENERATOR)
+if LIBRARY_FIXTURE then
+	makeLibrary(CFrame.new(), 1)
+end
 local t0 = os.clock()
 Gen.Build()
 print(string.format("MOCK build time %.1fs", os.clock() - t0))
 local island = workspace:FindFirstChild("Island")
 for _, folder in ipairs(island:GetChildren()) do
-	local parts, models, lights, emitters = 0, 0, 0, 0
+	local parts, models, lights, emitters, meshes = 0, 0, 0, 0, 0
 	for _, d in ipairs(folder:GetDescendants()) do
 		if d:IsA("BasePart") then
 			parts += 1
+			if d:IsA("MeshPart") then
+				meshes += 1
+			end
 		elseif d:IsA("Model") then
 			models += 1
 		elseif d:IsA("Light") then
@@ -17,7 +24,7 @@ for _, folder in ipairs(island:GetChildren()) do
 			emitters += 1
 		end
 	end
-	print(string.format("ZONE %-8s parts=%6d models=%5d lights=%4d emitters=%4d", folder.Name, parts, models, lights, emitters))
+	print(string.format("ZONE %-8s parts=%6d (meshes=%6d) models=%5d lights=%4d emitters=%4d", folder.Name, parts, meshes, models, lights, emitters))
 end
 print(string.format("TOTAL parts alive=%d instances created=%d voxels=%d fills=%d", MOCK.partCount, MOCK.instanceCount, MOCK.voxelWrites, MOCK.fillCalls))
 for msg, n in pairs(MOCK.warnings) do

@@ -12,6 +12,8 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
+local Waterworks = require(script.Parent.Parent.Waterworks)
 
 local Forest = {}
 
@@ -39,10 +41,55 @@ local function ground(p)
 end
 
 -- World tree --------------------------------------------------------------------------------
+-- Spirit motes around the crown and glowing rune stones around the roots.
+local function worldTreeExtras(m, base, rng)
+	-- drifting spirit motes all around the crown
+	local motes = box(m, CFrame.new(base + Vector3.new(0, 190, 0)), Vector3.new(260, 160, 260), rgb(255, 255, 255), M.SmoothPlastic, {
+		collide = false,
+		shadow = false,
+		transparency = 1,
+	})
+	motes.CanQuery = false
+	Util.particles(motes, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(rgb(200, 255, 170), rgb(255, 230, 140)),
+		Size = Util.ns(0, 0, 0.3, 1.2, 1, 0),
+		Lifetime = NumberRange.new(6, 10),
+		Rate = 40,
+		Speed = NumberRange.new(0.5, 2),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0, -0.4, 0),
+		LightEmission = 1,
+		Shape = Enum.ParticleEmitterShape.Box,
+	})
+
+	-- rune stones around the roots
+	for k = 0, 9 do
+		local a = k / 10 * TAU
+		local p = ground(base + Vector3.new(math.cos(a) * 150, 0, math.sin(a) * 150))
+		local cf = flatCF(p, base - p) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), 0, rng:NextNumber(-0.08, 0.08))
+		box(m, cf * CFrame.new(0, 6, 0), Vector3.new(6, 16, 3), STONE, M.Slate)
+		box(m, cf * CFrame.new(0, 14.4, 0), Vector3.new(6.4, 1.2, 3.4), MOSS, M.Grass, NOSHADOW)
+		box(m, cf * CFrame.new(0, 7, -1.55), Vector3.new(0.8, 9, 0.2), rgb(120, 255, 200), M.Neon, NOCOL_NOSHADOW)
+	end
+end
+
 local function buildWorldTree(parent, rng)
+	local base = Vector3.new(L.WorldTree.X, Landscape.WorldTreeHeight - 2, L.WorldTree.Z)
+	local mesh = AssetLibrary.place("WorldTree", parent, CFrame.new(base))
+	if mesh then
+		mesh.Name = "Elderheart_WorldTree"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for k = 0, 5 do
+			local a = k / 6 * TAU
+			local fx = AssetLibrary.anchor(mesh, CFrame.new(base), Vector3.new(math.cos(a) * 70, math.sin(a) * 70, 150), "SpiritLight")
+			Util.pointLight(fx, rgb(150, 255, 210), 1.5, 40)
+		end
+		worldTreeExtras(mesh, base, rng)
+		return mesh
+	end
 	local m = Util.model(parent, "Elderheart_WorldTree")
 	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
-	local base = Vector3.new(L.WorldTree.X, Landscape.WorldTreeHeight - 2, L.WorldTree.Z)
 	local H = 230
 
 	-- six strands twisting around each other form the trunk
@@ -110,35 +157,7 @@ local function buildWorldTree(parent, rng)
 		end
 	end
 
-	-- drifting spirit motes all around the crown
-	local motes = box(m, CFrame.new(base + Vector3.new(0, 190, 0)), Vector3.new(260, 160, 260), rgb(255, 255, 255), M.SmoothPlastic, {
-		collide = false,
-		shadow = false,
-		transparency = 1,
-	})
-	motes.CanQuery = false
-	Util.particles(motes, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(200, 255, 170), rgb(255, 230, 140)),
-		Size = Util.ns(0, 0, 0.3, 1.2, 1, 0),
-		Lifetime = NumberRange.new(6, 10),
-		Rate = 40,
-		Speed = NumberRange.new(0.5, 2),
-		SpreadAngle = Vector2.new(180, 180),
-		Acceleration = Vector3.new(0, -0.4, 0),
-		LightEmission = 1,
-		Shape = Enum.ParticleEmitterShape.Box,
-	})
-
-	-- rune stones around the roots
-	for k = 0, 9 do
-		local a = k / 10 * TAU
-		local p = ground(base + Vector3.new(math.cos(a) * 150, 0, math.sin(a) * 150))
-		local cf = flatCF(p, base - p) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), 0, rng:NextNumber(-0.08, 0.08))
-		box(m, cf * CFrame.new(0, 6, 0), Vector3.new(6, 16, 3), STONE, M.Slate)
-		box(m, cf * CFrame.new(0, 14.4, 0), Vector3.new(6.4, 1.2, 3.4), MOSS, M.Grass, NOSHADOW)
-		box(m, cf * CFrame.new(0, 7, -1.55), Vector3.new(0.8, 9, 0.2), rgb(120, 255, 200), M.Neon, NOCOL_NOSHADOW)
-	end
+	worldTreeExtras(m, base, rng)
 	return m
 end
 
@@ -147,54 +166,72 @@ local function buildLake(parent, rng)
 	local m = Util.model(parent, "MirrorLake")
 	local level = Landscape.ForestLakeLevel
 	local lake = L.ForestLake
-	local hill = Landscape.WaterfallHill
-	local toLake = (lake - hill).Unit
-	toLake = Vector3.new(toLake.X, 0, toLake.Z).Unit
-	local side = Vector3.new(-toLake.Z, 0, toLake.X)
-
-	-- cascade following the hill down to the water
-	local pts = {}
-	local p = Vector3.new(hill.X, 0, hill.Z) - toLake * 30
-	for _ = 1, 80 do
-		local h = Landscape.heightAt(p.X, p.Z)
-		table.insert(pts, Vector3.new(p.X, math.max(h, level) + 1.4, p.Z))
-		if h < level - 1 then
-			break
-		end
-		p += toLake * 10
-	end
+	local surface = math.ceil(level / 4) * 4 -- terrain water fills whole 4-stud voxels
 	local water = rgb(206, 236, 255)
-	for i = 1, #pts - 1 do
-		beam(m, pts[i], pts[i + 1], 30 - i * 0.2, 1.2, water, M.Glass, { collide = false, shadow = false, transparency = 0.35, reflectance = 0.15 })
-	end
-	local source = box(m, CFrame.new(pts[1]), Vector3.new(26, 2, 2), water, M.Glass, { collide = false, transparency = 1 })
-	Util.particles(source, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(230, 245, 255)),
-		Size = Util.ns(0, 1, 1, 0.3),
-		Transparency = Util.ns(0, 0.3, 1, 1),
-		Lifetime = NumberRange.new(1, 2),
-		Rate = 30,
-		Speed = NumberRange.new(4, 8),
-		SpreadAngle = Vector2.new(30, 10),
-	})
-	local foot = pts[#pts]
-	local mist = box(m, CFrame.new(foot + Vector3.new(0, 2, 0)), Vector3.new(30, 2, 10), water, M.Glass, { collide = false, transparency = 1 })
-	Util.particles(mist, {
-		Texture = Util.TEX.smoke,
-		Color = Util.cs(rgb(240, 248, 255)),
-		Size = Util.ns(0, 6, 1, 18),
-		Transparency = Util.ns(0, 0.6, 1, 1),
-		Lifetime = NumberRange.new(3, 5),
-		Rate = 10,
-		Speed = NumberRange.new(2, 5),
-		SpreadAngle = Vector2.new(60, 60),
-		Shape = Enum.ParticleEmitterShape.Box,
-	})
-	-- rocks along both banks of the cascade
-	for i = 1, #pts, 3 do
+
+	-- the waterfall itself is terrain water (see Waterworks); here: spray, streaks, mist and rocks
+	local parts, wf = Waterworks.waterfallParts()
+	if parts then
+		local f = wf.f
+		local side = Vector3.new(-f.Z, 0, f.X)
+		local lip = Vector3.new(wf.center.X, wf.top, wf.center.Z) + f * wf.r
+		local height = math.max(wf.top - surface, 8)
+		local sheetPos = lip + f * 4.6 + Vector3.new(0, -height / 2, 0)
+		local sheet = box(m, CFrame.lookAt(sheetPos, sheetPos + f), Vector3.new(16, height, 1), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		sheet.Name = "FallingWater"
+		sheet.CanQuery = false
+		Util.particles(sheet, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(255, 255, 255), rgb(200, 230, 250)),
+			Size = Util.ns(0, 2.2, 1, 3.4),
+			Transparency = Util.ns(0, 0.55, 0.7, 0.75, 1, 1),
+			Lifetime = NumberRange.new(0.8, 1.3),
+			Rate = 70,
+			Speed = NumberRange.new(2, 4),
+			Acceleration = Vector3.new(0, -46, 0),
+			EmissionDirection = Enum.NormalId.Bottom,
+			Shape = Enum.ParticleEmitterShape.Box,
+			LightInfluence = 1,
+		})
+		local spray = box(m, CFrame.lookAt(lip + f * 2 + Vector3.new(0, 0.6, 0), lip + f * 6 + Vector3.new(0, 0.6, 0)), Vector3.new(14, 1, 2), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		spray.Name = "LipSpray"
+		Util.particles(spray, {
+			Texture = Util.TEX.sparkle,
+			Color = Util.cs(rgb(235, 248, 255)),
+			Size = Util.ns(0, 0.8, 1, 0.3),
+			Transparency = Util.ns(0, 0.3, 1, 1),
+			Lifetime = NumberRange.new(0.8, 1.4),
+			Rate = 30,
+			Speed = NumberRange.new(4, 7),
+			SpreadAngle = Vector2.new(25, 10),
+			Acceleration = Vector3.new(0, -30, 0),
+			EmissionDirection = Enum.NormalId.Front,
+		})
+		local footPos = lip + f * 9 + Vector3.new(0, surface - wf.top + 1.5, 0)
+		local mist = box(m, CFrame.new(footPos), Vector3.new(26, 2, 12), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		mist.Name = "Mist"
+		Util.particles(mist, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(240, 248, 255)),
+			Size = Util.ns(0, 6, 1, 20),
+			Transparency = Util.ns(0, 0.55, 1, 1),
+			Lifetime = NumberRange.new(3, 5),
+			Rate = 14,
+			Speed = NumberRange.new(2, 5),
+			SpreadAngle = Vector2.new(60, 60),
+			Shape = Enum.ParticleEmitterShape.Box,
+			LightInfluence = 1,
+		})
+		-- boulders framing the falls and the stream
 		for _, s in ipairs({ -1, 1 }) do
-			TerrainWriter.boulder(rng, pts[i] + side * s * rng:NextNumber(18, 26), rng:NextNumber(6, 10), M.Rock)
+			for k = 0, 3 do
+				local p = lip + side * s * rng:NextNumber(12, 16) + f * rng:NextNumber(1, 5) + Vector3.new(0, -k * height / 4, 0)
+				TerrainWriter.boulder(rng, p, rng:NextNumber(5, 8), M.Rock)
+			end
+			for k = 1, 4 do
+				local p = lip - f * (k * 14) + side * s * rng:NextNumber(7, 10) + Vector3.new(0, 1, 0)
+				TerrainWriter.boulder(rng, p, rng:NextNumber(2.5, 4), M.Rock)
+			end
 		end
 	end
 
@@ -204,9 +241,9 @@ local function buildLake(parent, rng)
 		local r = rng:NextNumber(60, 220)
 		local q = lake + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
 		if Landscape.heightAt(q.X, q.Z) < level - 2 then
-			disc(m, Vector3.new(q.X, level + 0.15, q.Z), 0.2, rng:NextNumber(3, 6), rgb(70, 140, 60), M.Grass, NOCOL_NOSHADOW)
+			disc(m, Vector3.new(q.X, surface + 0.15, q.Z), 0.2, rng:NextNumber(3, 6), rgb(70, 140, 60), M.Grass, NOCOL_NOSHADOW)
 			if rng:NextNumber() < 0.3 then
-				ball(m, Vector3.new(q.X, level + 0.6, q.Z), 1.2, rgb(250, 200, 220), M.SmoothPlastic, NOCOL_NOSHADOW)
+				ball(m, Vector3.new(q.X, surface + 0.6, q.Z), 1.2, rgb(250, 200, 220), M.SmoothPlastic, NOCOL_NOSHADOW)
 			end
 		end
 	end
@@ -217,7 +254,7 @@ local function buildLake(parent, rng)
 	local startP = lake + towardCenter * 300
 	local endP = lake + towardCenter * 230
 	local planks = rgb(132, 100, 70)
-	local deckY = level + 2.2
+	local deckY = surface + 2.2
 	local a0 = Vector3.new(startP.X, deckY, startP.Z)
 	local a1 = Vector3.new(endP.X, deckY, endP.Z)
 	local len = (a1 - a0).Magnitude
@@ -242,9 +279,62 @@ end
 -- Cottage -----------------------------------------------------------------------------------------
 local ROOFS = { rgb(70, 82, 104), rgb(128, 58, 48), rgb(84, 104, 66), rgb(96, 70, 60) }
 
+-- Picket fence, vegetable rows and a woodpile in front of a cottage.
+local function cottageGarden(m, rng, cf, W, D)
+	-- picket fence around a front garden
+	local fence = rgb(226, 216, 196)
+	local gardenFront = -D / 2 - 14
+	for x = -W / 2 - 4, W / 2 + 4, 3 do
+		if math.abs(x) > 3 then
+			local p = (cf * CFrame.new(x, 0, gardenFront)).Position
+			local g = Landscape.heightAt(p.X, p.Z)
+			box(m, CFrame.new(Vector3.new(p.X, g + 1.6, p.Z)) * cf.Rotation, Vector3.new(0.5, 4, 0.5), fence, M.Wood, NOSHADOW)
+		end
+	end
+	for _, s in ipairs({ -1, 1 }) do
+		local a = (cf * CFrame.new(s * 3, 0, gardenFront)).Position
+		local b = (cf * CFrame.new(s * (W / 2 + 4), 0, gardenFront)).Position
+		local ga, gb = Landscape.heightAt(a.X, a.Z), Landscape.heightAt(b.X, b.Z)
+		beam(m, Vector3.new(a.X, ga + 2.6, a.Z), Vector3.new(b.X, gb + 2.6, b.Z), 0.3, 0.6, fence, M.Wood, NOSHADOW)
+	end
+	-- vegetable rows and a woodpile
+	for row = 0, 2 do
+		local c = cf * CFrame.new(-W / 4, 0.3, -D / 2 - 5 - row * 3)
+		box(m, c, Vector3.new(8, 1, 1.6), rgb(92, 64, 44), M.Ground, NOSHADOW)
+		for k = -1, 1 do
+			ball(m, (c * CFrame.new(k * 2.5, 0.9, 0)).Position, 1.4, rgb(90, 160, 60), M.LeafyGrass, NOCOL_NOSHADOW)
+		end
+	end
+	for k = 0, 5 do
+		local c = cf * CFrame.new(W / 2 + 2 + (k % 3) * 1.5 + (k // 3) * 0.75, 1 + (k // 3) * 1.3, 0) * CFrame.Angles(0, HALF_PI, 0)
+		Util.cylinder(m, c, 6, 1.4, rgb(130, 96, 64), M.Wood, NOSHADOW)
+	end
+end
+
 local function cottage(parent, rng, pos, facing)
-	local m = Util.model(parent, "Cottage")
 	local cf = flatCF(pos, facing)
+	local mesh = AssetLibrary.place("Cottage", parent, cf, 1, { Shingle = Util.pick(rng, ROOFS) })
+	if mesh then
+		local smoke = AssetLibrary.anchor(mesh, cf, Vector3.new(8, 4.5, 28.4), "ChimneySmoke")
+		Util.particles(smoke, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(220, 220, 220), rgb(170, 170, 170)),
+			Size = Util.ns(0, 1.5, 1, 7),
+			Transparency = Util.ns(0, 0.4, 1, 1),
+			Lifetime = NumberRange.new(5, 8),
+			Rate = 3,
+			Speed = NumberRange.new(2, 4),
+			SpreadAngle = Vector2.new(8, 8),
+			Acceleration = Vector3.new(1, 0.4, 0),
+			EmissionDirection = Enum.NormalId.Top,
+			LightInfluence = 1,
+		})
+		Util.pointLight(AssetLibrary.anchor(mesh, cf, Vector3.new(-3.4, -9.9, 10.8), "PorchLight"), rgb(255, 190, 120), 1.2, 18)
+		Util.pointLight(AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 7), "Hearth"), rgb(255, 190, 120), 1, 16)
+		cottageGarden(mesh, rng, cf, 24, 18)
+		return mesh
+	end
+	local m = Util.model(parent, "Cottage")
 	local W, D, H = 24, 18, 12
 	local plaster = Util.vary(rng, rgb(240, 228, 204), 0.03)
 	local roofColor = Util.pick(rng, ROOFS)
@@ -302,34 +392,7 @@ local function cottage(parent, rng, pos, facing)
 	local lantern = box(m, cf * CFrame.new(-3.6, 2.5 + 9.5, -D / 2 - 0.9), Vector3.new(1.2, 1.6, 1.2), rgb(255, 210, 140), M.Neon, NOCOL_NOSHADOW)
 	Util.pointLight(lantern, rgb(255, 190, 120), 1.2, 18)
 
-	-- picket fence around a front garden
-	local fence = rgb(226, 216, 196)
-	local gardenFront = -D / 2 - 14
-	for x = -W / 2 - 4, W / 2 + 4, 3 do
-		if math.abs(x) > 3 then
-			local p = (cf * CFrame.new(x, 0, gardenFront)).Position
-			local g = Landscape.heightAt(p.X, p.Z)
-			box(m, CFrame.new(Vector3.new(p.X, g + 1.6, p.Z)) * cf.Rotation, Vector3.new(0.5, 4, 0.5), fence, M.Wood, NOSHADOW)
-		end
-	end
-	for _, s in ipairs({ -1, 1 }) do
-		local a = (cf * CFrame.new(s * 3, 0, gardenFront)).Position
-		local b = (cf * CFrame.new(s * (W / 2 + 4), 0, gardenFront)).Position
-		local ga, gb = Landscape.heightAt(a.X, a.Z), Landscape.heightAt(b.X, b.Z)
-		beam(m, Vector3.new(a.X, ga + 2.6, a.Z), Vector3.new(b.X, gb + 2.6, b.Z), 0.3, 0.6, fence, M.Wood, NOSHADOW)
-	end
-	-- vegetable rows and a woodpile
-	for row = 0, 2 do
-		local c = cf * CFrame.new(-W / 4, 0.3, -D / 2 - 5 - row * 3)
-		box(m, c, Vector3.new(8, 1, 1.6), rgb(92, 64, 44), M.Ground, NOSHADOW)
-		for k = -1, 1 do
-			ball(m, (c * CFrame.new(k * 2.5, 0.9, 0)).Position, 1.4, rgb(90, 160, 60), M.LeafyGrass, NOCOL_NOSHADOW)
-		end
-	end
-	for k = 0, 5 do
-		local c = cf * CFrame.new(W / 2 + 2 + (k % 3) * 1.5 + (k // 3) * 0.75, 1 + (k // 3) * 1.3, 0) * CFrame.Angles(0, HALF_PI, 0)
-		Util.cylinder(m, c, 6, 1.4, rgb(130, 96, 64), M.Wood, NOSHADOW)
-	end
+	cottageGarden(m, rng, cf, W, D)
 	return m
 end
 
@@ -499,7 +562,7 @@ function Forest.Build(folder, rng)
 		{ L.ForestSpawn, 90 },
 		{ L.WorldTree, 175 },
 		{ L.ForestLake, 380 },
-		{ Landscape.WaterfallHill, 120 },
+		{ Landscape.Waterfall and Landscape.Waterfall.center or L.ForestLake, 170 },
 	}
 	for _, c in ipairs(Layout.forestCottages()) do
 		table.insert(avoid, { c, 60 })

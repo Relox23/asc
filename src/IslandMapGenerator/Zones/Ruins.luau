@@ -9,6 +9,7 @@ local Layout = require(script.Parent.Parent.IslandLayout)
 local Landscape = require(script.Parent.Parent.Landscape)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Ruins = {}
 
@@ -107,6 +108,50 @@ local function skyscraper(parent, rng, cf, w, d, H)
 	return m
 end
 
+-- Detailed tower meshes: their full height, the scale range they look right at,
+-- and a spot on the broken top where a fire can burn (Blender coordinates).
+local TOWER_MESHES = {
+	{ name = "Skyscraper_A", height = 300, min = 0.6, max = 1.4, fire = Vector3.new(15, 15, 217) },
+	{ name = "Skyscraper_B", height = 200, min = 0.6, max = 1.5, fire = Vector3.new(14, 0, 181) },
+}
+
+local function burning(part)
+	Util.pointLight(part, rgb(255, 110, 40), 2, 40)
+	Util.fire(part, 10, 12)
+	Util.particles(part, {
+		Texture = Util.TEX.smoke,
+		Color = Util.cs(rgb(40, 38, 38), rgb(90, 88, 88)),
+		Size = Util.ns(0, 6, 1, 26),
+		Transparency = Util.ns(0, 0.3, 1, 1),
+		Lifetime = NumberRange.new(8, 12),
+		Rate = 3,
+		Speed = NumberRange.new(6, 9),
+		SpreadAngle = Vector2.new(10, 10),
+		EmissionDirection = Enum.NormalId.Top,
+		LightInfluence = 1,
+	})
+end
+
+-- A skyscraper mesh with its base at cf, or nil without the asset library.
+-- stump = the short gutted frame instead of a tall tower.
+local function towerMesh(parent, rng, cf, H, stump)
+	if stump then
+		return AssetLibrary.place("Skyscraper_C", parent, cf, rng:NextNumber(0.8, 1.2))
+	end
+	local first = rng:NextInteger(1, #TOWER_MESHES)
+	for k = 0, #TOWER_MESHES - 1 do
+		local t = TOWER_MESHES[(first + k - 1) % #TOWER_MESHES + 1]
+		local m = AssetLibrary.place(t.name, parent, cf, math.clamp(H / t.height, t.min, t.max))
+		if m then
+			if cf.UpVector.Y > 0.9 and rng:NextNumber() < 0.35 then
+				burning(AssetLibrary.anchor(m, cf, t.fire, "Fire"))
+			end
+			return m
+		end
+	end
+	return nil
+end
+
 -- Concrete chunks scattered around a point.
 local function debris(parent, rng, center, radius, count)
 	local m = Util.model(parent, "Debris")
@@ -195,18 +240,23 @@ function Ruins.Build(folder, rng)
 				-- taller towers closer to the old downtown
 				local downtown = 1 - math.clamp((p - center).Magnitude / 1900, 0, 1)
 				local H = rng:NextNumber(110, 200) + downtown * rng:NextNumber(80, 240)
+				local function tower(cf, h, stump)
+					if not towerMesh(towers, rng, cf, h, stump) then
+						skyscraper(towers, rng, cf, w, d, h)
+					end
+				end
 				if roll < 0.12 then
 					-- toppled tower lying in the sand
 					local cf = CFrame.new(p + Vector3.new(0, math.min(w, d) * 0.25, 0)) * yaw * CFrame.Angles(HALF_PI * 0.94, 0, 0) * CFrame.new(0, -H * 0.15, 0)
-					skyscraper(towers, rng, cf, w, d, H * 0.7)
+					tower(cf, H * 0.7)
 				elseif roll < 0.3 then
 					-- stump
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, 6, 0)) * yaw, w, d, rng:NextNumber(26, 70))
+					tower(CFrame.new(p - Vector3.new(0, 6, 0)) * yaw, rng:NextNumber(26, 70), true)
 				elseif roll < 0.6 then
 					local tilt = CFrame.Angles(rng:NextNumber(-0.22, 0.22), 0, rng:NextNumber(-0.22, 0.22))
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, rng:NextNumber(12, 30), 0)) * yaw * tilt, w, d, H)
+					tower(CFrame.new(p - Vector3.new(0, rng:NextNumber(12, 30), 0)) * yaw * tilt, H)
 				else
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, rng:NextNumber(8, 24), 0)) * yaw, w, d, H)
+					tower(CFrame.new(p - Vector3.new(0, rng:NextNumber(8, 24), 0)) * yaw, H)
 				end
 				-- rubble mound and chunks at the base
 				for _ = 1, 3 do

@@ -12,3 +12,7 @@
 
 # Backup files
 *.bak
+
+# Python and Blender leftovers
+__pycache__/
+*.blend1

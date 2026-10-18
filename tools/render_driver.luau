@@ -3,10 +3,14 @@ local Gen = mockRequire(GENERATOR)
 local Landscape = mockRequire(GENERATOR.Landscape)
 local Layout = mockRequire(GENERATOR.IslandLayout)
 Gen.Build({ "Hub", "Forest", "Snow", "Hollow", "Dunes", "Ruins", "Coast", "Sky" })
+mockRequire(GENERATOR.Waterworks).Build() -- normally part of the (skipped) Terrain step
 
 local VIEWS = __VIEWS__
 
 local function shapeOf(p)
+	if p:IsA("MeshPart") then
+		return "M:" .. string.gsub(p.MeshId, "^fixture://", "")
+	end
 	if p:IsA("WedgePart") then
 		return "W"
 	end
@@ -49,8 +53,17 @@ for vi, v in ipairs(VIEWS) do
 	for _, f in ipairs(MOCK.fills) do
 		local pos = f[2].Position
 		if (pos.X - c.X) ^ 2 + (pos.Z - c.Z) ^ 2 < (r + 50) ^ 2 then
+			-- size of the filled shape: ball = radius, cylinder = radius + height, block = Vector3
+			local size
+			if f[1] == "block" then
+				size = f[3]
+			elseif f[1] == "cyl" then
+				size = Vector3.new(2 * f[3], f[5], 2 * f[3])
+			else
+				size = Vector3.new(2 * f[3], 2 * f[3], 2 * f[3])
+			end
 			print(string.format("F %s %.2f %.2f %.2f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f", f[1],
-				f[2]:GetComponents()) .. string.format(" %.2f %.2f %s", f[3], f[5] or 0, f[4]))
+				f[2]:GetComponents()) .. string.format(" %.2f %.2f %.2f %s", size.X, size.Y, size.Z, f[4]))
 		end
 	end
 	local step = v.step

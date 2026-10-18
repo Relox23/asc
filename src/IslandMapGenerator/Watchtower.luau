@@ -14,6 +14,7 @@
 ]]
 
 local Util = require(script.Parent.Util)
+local AssetLibrary = require(script.Parent.AssetLibrary)
 
 local Watchtower = {}
 
@@ -122,7 +123,7 @@ local function horn(m, T, side, style, inset, scale, depthScale)
 		local across = Vector3.new(d.Y, -d.X, 0) * side
 		local w = (92 * (1 - t) ^ 1.2 + 3) * scale + math.max(0, 1 - t * 8) * 40 * scale
 		local dep = (50 * (1 - t) ^ 1.1 + 2) * depthScale
-		local mid = (a + b) / 2 + across * (inset * w)
+		local mid = (a + b) / 2 + across * (inset * w / scale) -- a stripe runs along the horn's inner edge
 		local cf = T * CFrame.fromMatrix(mid, across, d)
 		box(m, cf, Vector3.new(w, (b - a).Magnitude + 2, dep), style.color, style.material)
 	end
@@ -389,13 +390,27 @@ end
 function Watchtower.Build(parent, base, front)
 	front = Vector3.new(front.X, 0, front.Z).Unit
 	local T = CFrame.lookAt(base, base + front) -- local -Z is the entrance side
-	local source = Watchtower.findImported()
-	local m = source and placeImported(parent, source, base, front)
+	local m = AssetLibrary.place("Watchtower", parent, T)
 	if m then
-		Util.log("  using the imported PleiadesWatchtower mesh")
-	else
-		m = buildParts(parent, T)
+		m.Name = "PleiadesWatchtower"
 		m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for _, p in ipairs(m:GetDescendants()) do
+			local style = p:IsA("BasePart") and STYLE[p:GetAttribute("Style")]
+			if style then
+				p.Color = style.color
+				p.Material = style.material
+			end
+		end
+		Util.log("  using the Watchtower mesh from " .. AssetLibrary.IMPORT_NAME)
+	else
+		local source = Watchtower.findImported()
+		m = source and placeImported(parent, source, base, front)
+		if m then
+			Util.log("  using the imported PleiadesWatchtower mesh")
+		else
+			m = buildParts(parent, T)
+			m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		end
 	end
 
 	local extras = Util.model(parent, "WatchtowerLights")

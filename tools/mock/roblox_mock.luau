@@ -1019,6 +1019,9 @@ function Inst.Clone(o)
 			props[k] = v
 		end
 	end
+	for k, v in pairs(rawget(o, "__attrs")) do
+		rawget(c, "__attrs")[k] = v -- Clone keeps attributes (and a Model's scale)
+	end
 	for _, ch in ipairs(children(o)) do
 		local cc = Inst.Clone(ch)
 		cc.Parent = c
@@ -1102,12 +1105,16 @@ local function checkMat(m)
 end
 local TerrainMethods = {}
 function TerrainMethods.Clear() end
+MOCK.fills = {}
 function TerrainMethods.FillBlock(_, cf, size, mat)
 	assert(MOCK.isCF(cf) and MOCK.isV3(size), "FillBlock(CFrame, Vector3, Material)")
 	checkMat(mat)
 	MOCK.fillCalls += 1
+	-- the open-sea fills are huge; only keep the small ones (water features, terrain pads)
+	if size.X <= 200 and size.Z <= 200 then
+		table.insert(MOCK.fills, { "block", cf, size, mat.Name })
+	end
 end
-MOCK.fills = {}
 function TerrainMethods.FillBall(_, pos, radius, mat)
 	assert(MOCK.isV3(pos) and type(radius) == "number", "FillBall(Vector3, number, Material)")
 	checkMat(mat)

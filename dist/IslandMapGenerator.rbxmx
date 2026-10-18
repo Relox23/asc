@@ -1,7 +1,7 @@
 <roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
 	<External>null</External>
 	<External>nil</External>
-	<Item class="ModuleScript" referent="RBX00000013">
+	<Item class="ModuleScript" referent="RBX00000015">
 		<Properties>
 			<string name="Name">IslandMapGenerator</string>
 			<ProtectedString name="Source"><![CDATA[--[[
@@ -13,6 +13,9 @@
 	  2. Open View > Command Bar and run:
 	         require(game.ServerStorage.IslandMapGenerator).Build()
 	  3. Wait for "[IslandMap] Done" in the Output window (a few minutes).
+
+	For the detailed buildings and trees, first import assets/IslandAssets.fbx
+	(Home > Import 3D) and keep the imported model named "IslandAssets".
 
 	Rebuild only some parts:
 	         require(game.ServerStorage.IslandMapGenerator).Build({ "Snow", "Atmosphere" })
@@ -26,6 +29,7 @@ local Landscape = require(script.Landscape)
 local TerrainWriter = require(script.TerrainWriter)
 local Atmosphere = require(script.Atmosphere)
 local Util = require(script.Util)
+local AssetLibrary = require(script.AssetLibrary)
 
 local Generator = {}
 
@@ -85,6 +89,10 @@ function Generator.Build(steps)
 	end
 
 	Util.log(string.format("Building island (radius %d studs)...", Layout.ISLAND_RADIUS))
+	AssetLibrary.reset() -- pick up a freshly imported IslandAssets model
+	if not AssetLibrary.available() then
+		Util.log("No " .. AssetLibrary.IMPORT_NAME .. " model found; building everything from parts (see README to import the detailed meshes)")
+	end
 	Landscape.init()
 	removeDefaults()
 	local island = islandFolder()
@@ -143,6 +151,340 @@ return Generator
 ]]></ProtectedString>
 		</Properties>
 		<Item class="ModuleScript" referent="RBX00000000">
+			<Properties>
+				<string name="Name">AssetLibrary</string>
+				<ProtectedString name="Source"><![CDATA[--[[
+	AssetLibrary
+	Detailed Blender meshes for the map (assets/IslandAssets.fbx).
+
+	Import that FBX into Studio once (Home > Import 3D). The importer makes a
+	Model named "IslandAssets"; leave it in Workspace or ServerStorage and the
+	generator uses its meshes instead of building things from parts.
+
+	Every mesh is named "<Asset>__<Style>" (e.g. "Palace__Marble"). Three tiny
+	marker meshes per asset ("<Asset>__Origin", "__Up", "__Front") give the
+	asset's ground point, up and front directions and its true size, so it
+	doesn't matter which axis or unit settings the importer used.
+
+	Coordinates from the Blender scripts map to asset-local offsets with
+	AssetLibrary.fromBlender(x, y, z) (Blender is Z-up with the front at -Y).
+]]
+
+local Util = require(script.Parent.Util)
+
+local AssetLibrary = {}
+
+AssetLibrary.IMPORT_NAME = "IslandAssets"
+local MARKER_LEN = 10 -- studs between the Origin and Up markers in Blender
+
+local M = Enum.Material
+local rgb = Color3.fromRGB
+
+-- colour, material and flags per style
+local STYLES = {
+	Marble = { rgb(244, 240, 230), M.Marble },
+	Stone = { rgb(232, 218, 190), M.Limestone },
+	Plaster = { rgb(236, 226, 206), M.Plaster },
+	Sandstone = { rgb(198, 156, 108), M.Sandstone },
+	Trim = { rgb(222, 160, 104), M.Sandstone },
+	Gold = { rgb(214, 172, 74), M.Foil },
+	Teal = { rgb(30, 116, 124), M.CeramicTiles },
+	Dark = { rgb(34, 28, 28), M.SmoothPlastic },
+	Door = { rgb(92, 60, 40), M.WoodPlanks },
+	Wood = { rgb(132, 98, 66), M.WoodPlanks },
+	WoodDark = { rgb(70, 50, 38), M.Wood },
+	Fabric = { rgb(166, 46, 44), M.Fabric, soft = true },
+	Fabric2 = { rgb(222, 152, 44), M.Fabric, soft = true },
+	Canvas = { rgb(214, 196, 168), M.Fabric, soft = true },
+	Rope = { rgb(222, 200, 150), M.Fabric, soft = true },
+	Shingle = { rgb(70, 82, 104), M.RoofShingles },
+	Thatch = { rgb(146, 120, 80), M.Grass },
+	Tile = { rgb(62, 60, 66), M.ClayRoofTiles },
+	Shoji = { rgb(252, 238, 210), M.SmoothPlastic },
+	Vermilion = { rgb(178, 50, 38), M.SmoothPlastic },
+	Black = { rgb(30, 28, 28), M.SmoothPlastic },
+	Granite = { rgb(150, 148, 144), M.Granite },
+	Snow = { rgb(242, 247, 252), M.Snow },
+	Bark = { rgb(98, 74, 52), M.Wood },
+	BarkPale = { rgb(226, 222, 210), M.Wood },
+	Leaves = { rgb(84, 148, 62), M.LeafyGrass, soft = true },
+	LeavesLight = { rgb(130, 186, 84), M.LeafyGrass, soft = true },
+	LeavesDark = { rgb(34, 64, 48), M.Grass, soft = true },
+	LeavesGold = { rgb(236, 206, 96), M.LeafyGrass, soft = true },
+	Blossom = { rgb(244, 170, 200), M.LeafyGrass, soft = true },
+	Moss = { rgb(82, 120, 56), M.Grass },
+	Frond = { rgb(72, 134, 54), M.Grass, soft = true },
+	Coconut = { rgb(92, 66, 38), M.Wood, soft = true },
+	Flower2 = { rgb(250, 220, 90), M.SmoothPlastic, soft = true },
+	Fruit = { rgb(232, 120, 40), M.SmoothPlastic, soft = true },
+	Fruit2 = { rgb(200, 40, 50), M.SmoothPlastic, soft = true },
+	Clay = { rgb(176, 96, 60), M.Slate },
+	Quartz = { rgb(236, 240, 246), M.Glass, transparency = 0.05, reflectance = 0.15 },
+	Bone = { rgb(232, 226, 208), M.Marble },
+	Concrete = { rgb(98, 96, 94), M.Concrete },
+	Glass = { rgb(30, 38, 46), M.Glass, reflectance = 0.15 },
+	GlassClear = { rgb(210, 235, 250), M.Glass, transparency = 0.45, reflectance = 0.2 },
+	Rebar = { rgb(96, 58, 40), M.CorrodedMetal, soft = true },
+	Paint = { rgb(110, 58, 40), M.CorrodedMetal },
+	Rubber = { rgb(24, 22, 22), M.Rubber },
+	Metal = { rgb(60, 58, 56), M.Metal },
+	Iron = { rgb(50, 50, 54), M.Metal },
+	Bronze = { rgb(74, 64, 50), M.Metal },
+	White = { rgb(240, 238, 232), M.Plaster },
+	Red = { rgb(178, 44, 40), M.Plaster },
+	Hull = { rgb(92, 66, 46), M.WoodPlanks },
+	Bastion = { rgb(236, 236, 240), M.Concrete },
+	BastionTrim = { rgb(210, 212, 222), M.Concrete },
+	Glow = { rgb(255, 214, 150), M.Neon, glow = true },
+	GlowBlue = { rgb(150, 210, 255), M.Neon, glow = true },
+	GlowGreen = { rgb(170, 255, 220), M.Neon, glow = true },
+	Lantern = { rgb(232, 80, 48), M.Neon, glow = true },
+}
+AssetLibrary.STYLES = STYLES
+
+local library -- nil = not looked yet, false = no library imported
+
+local function findSource()
+	local ServerStorage = game:GetService("ServerStorage")
+	local source = ServerStorage:FindFirstChild(AssetLibrary.IMPORT_NAME)
+	if not source then
+		local inWorkspace = workspace:FindFirstChild(AssetLibrary.IMPORT_NAME)
+		if inWorkspace then
+			-- keep the imported original out of the game world
+			inWorkspace.Parent = ServerStorage
+			source = inWorkspace
+		end
+	end
+	return source
+end
+
+-- Forget what was loaded (call before each build so a fresh import is picked up).
+function AssetLibrary.reset()
+	library = nil
+end
+
+local function load()
+	if library ~= nil then
+		return library or nil
+	end
+	local source = findSource()
+	if not source then
+		library = false
+		return nil
+	end
+	local assets = {}
+	local count = 0
+	for _, d in ipairs(source:GetDescendants()) do
+		if d:IsA("BasePart") then
+			local asset, rest = string.match(d.Name, "^(.-)__(.+)$")
+			if asset then
+				local entry = assets[asset]
+				if not entry then
+					entry = { pieces = {}, markers = {} }
+					assets[asset] = entry
+					count += 1
+				end
+				if rest == "Origin" or rest == "Up" or rest == "Front" then
+					entry.markers[rest] = d
+				else
+					local style = (string.gsub(rest, "_%d+$", ""))
+					table.insert(entry.pieces, { part = d, style = style })
+				end
+			end
+		end
+	end
+	library = { assets = assets, templates = {}, tinted = {} }
+	Util.log(string.format("Using %d detailed models from the imported %s model", count, AssetLibrary.IMPORT_NAME))
+	return library
+end
+
+function AssetLibrary.available()
+	return load() ~= nil
+end
+
+-- Asset-local offset of a point given in the Blender scripts' coordinates.
+function AssetLibrary.fromBlender(x, y, z)
+	return Vector3.new(-x, z, y)
+end
+
+local function applyStyle(p, styleName)
+	p.Anchored = true
+	local s = STYLES[styleName]
+	if s then
+		p.Color = s[1]
+		p.Material = s[2]
+		p.Transparency = s.transparency or 0
+		p.Reflectance = s.reflectance or 0
+		if s.soft or s.glow then
+			p.CanCollide = false
+			p.CanTouch = false
+		end
+		if s.glow then
+			p.CastShadow = false
+		end
+	end
+	pcall(function()
+		if s and (s.soft or s.glow) then
+			p.CollisionFidelity = Enum.CollisionFidelity.Box
+		elseif p.Size.Magnitude > 80 then
+			p.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition
+		end
+	end)
+	p:SetAttribute("Style", styleName)
+end
+
+-- The normalised template for an asset (pivot at its ground point, front = -Z), or nil.
+function AssetLibrary.template(name)
+	local lib = load()
+	if not lib then
+		return nil
+	end
+	local cached = lib.templates[name]
+	if cached ~= nil then
+		return cached or nil
+	end
+	local entry = lib.assets[name]
+	local mk = entry and entry.markers
+	if not entry or not (mk.Origin and mk.Up and mk.Front) or #entry.pieces == 0 then
+		if entry then
+			warn("[IslandMap] Asset " .. name .. " is missing its marker meshes; using the parts version")
+		end
+		lib.templates[name] = false
+		return nil
+	end
+	local origin = mk.Origin.Position
+	local upVector = mk.Up.Position - origin
+	local scale = MARKER_LEN / upVector.Magnitude
+	local up = upVector.Unit
+	local front = mk.Front.Position - origin
+	front = (front - up * front:Dot(up)).Unit
+	local back = -front
+	local frame = CFrame.fromMatrix(origin, up:Cross(back), up, back)
+	local toLocal = frame:Inverse()
+
+	local model = Instance.new("Model")
+	model.Name = name
+	for _, piece in ipairs(entry.pieces) do
+		local p = piece.part:Clone()
+		for _, child in ipairs(p:GetChildren()) do
+			child:Destroy() -- drop imported SurfaceAppearances, welds, etc.
+		end
+		local rel = toLocal * piece.part.CFrame
+		p.Size = piece.part.Size * scale
+		p.CFrame = CFrame.new(rel.Position * scale) * rel.Rotation
+		applyStyle(p, piece.style)
+		p.Parent = model
+	end
+	model.WorldPivot = CFrame.new()
+	lib.templates[name] = model
+	return model
+end
+
+function AssetLibrary.has(name)
+	return AssetLibrary.template(name) ~= nil
+end
+
+local function recolor(model, colors)
+	if not colors then
+		return
+	end
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") then
+			local c = colors[p:GetAttribute("Style")]
+			if c then
+				p.Color = c
+			end
+		end
+	end
+end
+
+-- Template copy with some styles recoloured (cached), for tree and palm variety.
+function AssetLibrary.tinted(name, colors, key)
+	local lib = load()
+	local base = AssetLibrary.template(name)
+	if not base then
+		return nil
+	end
+	local id = name .. "|" .. key
+	local t = lib.tinted[id]
+	if not t then
+		t = base:Clone()
+		recolor(t, colors)
+		t.WorldPivot = CFrame.new()
+		lib.tinted[id] = t
+	end
+	return t
+end
+
+-- Templates for every listed asset that exists, optionally in several tints.
+-- tints: list of {Style = Color3} tables (or nil). Returns nil when none exist.
+function AssetLibrary.templates(names, tints)
+	if not AssetLibrary.available() then
+		return nil
+	end
+	local list = {}
+	for _, name in ipairs(names) do
+		if AssetLibrary.has(name) then
+			if tints then
+				for i, colors in ipairs(tints) do
+					table.insert(list, AssetLibrary.tinted(name, colors, tostring(i)))
+				end
+			else
+				table.insert(list, AssetLibrary.template(name))
+			end
+		end
+	end
+	return #list > 0 and list or nil
+end
+
+-- Clone an asset into the world. cf is where its ground point goes (front = cf.LookVector).
+function AssetLibrary.place(name, parent, cf, scale, colors)
+	local t = AssetLibrary.template(name)
+	if not t then
+		return nil
+	end
+	local m = t:Clone()
+	if scale and math.abs(scale - 1) > 1e-3 then
+		m:ScaleTo(scale)
+	end
+	m:PivotTo(cf)
+	recolor(m, colors)
+	m.Parent = parent
+	return m
+end
+
+-- First piece of a placed asset with the given style (to hang lights or particles on).
+function AssetLibrary.piece(model, style)
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") and p:GetAttribute("Style") == style then
+			return p
+		end
+	end
+	return nil
+end
+
+-- Invisible anchor part at an asset-local Blender position (for lights and particles).
+function AssetLibrary.anchor(model, cf, blenderPos, name)
+	local scale = model:GetScale()
+	local p = Instance.new("Part")
+	p.Name = name or "FX"
+	p.Size = Vector3.new(1, 1, 1)
+	p.Transparency = 1
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanTouch = false
+	p.CanQuery = false
+	p.CastShadow = false
+	p.CFrame = cf * CFrame.new(AssetLibrary.fromBlender(blenderPos.X, blenderPos.Y, blenderPos.Z) * scale)
+	p.Parent = model
+	return p
+end
+
+return AssetLibrary
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="ModuleScript" referent="RBX00000001">
 			<Properties>
 				<string name="Name">Atmosphere</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -253,11 +595,11 @@ return Atmosphere
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="Folder" referent="RBX00000002">
+		<Item class="Folder" referent="RBX00000003">
 			<Properties>
 				<string name="Name">Client</string>
 			</Properties>
-			<Item class="LocalScript" referent="RBX00000001">
+			<Item class="LocalScript" referent="RBX00000002">
 				<Properties>
 					<string name="Name">IslandAtmosphere</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -688,7 +1030,7 @@ end)
 				</Properties>
 			</Item>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000003">
+		<Item class="ModuleScript" referent="RBX00000004">
 			<Properties>
 				<string name="Name">Config</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -718,7 +1060,8 @@ Config.Build = {
 Config.PLAYER_START = "Forest"
 
 -- Multiplies how many trees, bushes and rocks are scattered.
--- 1 = full forests (~150k parts in total). Lower it on weaker PCs or for mobile.
+-- 1 = full forests: about 40k parts with the imported IslandAssets meshes
+-- (125k when everything is built from parts). Lower it on weaker PCs or for mobile.
 Config.FOLIAGE_DENSITY = 1
 
 -- Delete the existing terrain and the previously generated map before building.
@@ -740,7 +1083,7 @@ return Config
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000004">
+		<Item class="ModuleScript" referent="RBX00000005">
 			<Properties>
 				<string name="Name">IslandLayout</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -934,7 +1277,7 @@ return Layout
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000005">
+		<Item class="ModuleScript" referent="RBX00000006">
 			<Properties>
 				<string name="Name">Landscape</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -1092,7 +1435,7 @@ Landscape.MAX_COAST = R * 1.12
 -- Features (filled in by init) -------------------------------------------------
 local craters = {}
 local lakes = {}
-local hills = {}
+local plateaus = {}
 local pads = {}
 local corridor
 local rampBottom = {}
@@ -1133,12 +1476,6 @@ local function featureHeight(x, z, h, withLakes)
 			h += c.r * 0.07 * exp(-((dc - c.r) / (0.22 * c.r)) ^ 2)
 		end
 	end
-	for _, hl in ipairs(hills) do
-		local dd = (x - hl.x) ^ 2 + (z - hl.z) ^ 2
-		if dd < (hl.r * 3) ^ 2 then
-			h += hl.h * exp(-dd / (hl.r * hl.r))
-		end
-	end
 	if withLakes then
 		for _, lk in ipairs(lakes) do
 			local dx, dz = x - lk.x, z - lk.z
@@ -1147,6 +1484,21 @@ local function featureHeight(x, z, h, withLakes)
 				local dl = sqrt(dd) * (1 + 0.12 * n2(x, z, 1 / 120, 70))
 				local bowl = 1 - smooth(lk.r * 0.45, lk.r, dl)
 				h = lerp(h, lk.level - lk.depth, bowl)
+			end
+		end
+		-- flat-topped plateaus: a sheer straight cliff on one side, gentle slopes elsewhere
+		for _, pl in ipairs(plateaus) do
+			local dx, dz = x - pl.x, z - pl.z
+			if abs(dx) < pl.reach and abs(dz) < pl.reach then
+				local u = dx * pl.fx + dz * pl.fz
+				local v = abs(-dx * pl.fz + dz * pl.fx) + 14 * n2(x, z, 1 / 90, 72)
+				local back = -u + 14 * n2(x, z, 1 / 90, 73)
+				local m = (1 - smooth(pl.r, pl.r + pl.steep, u))
+					* (1 - smooth(pl.r, pl.r + pl.gentle, back))
+					* (1 - smooth(pl.r * 0.8, pl.r * 0.8 + pl.gentle * 0.7, v))
+				if m > 0 then
+					h = lerp(h, pl.top, m)
+				end
 			end
 		end
 	end
@@ -1295,7 +1647,8 @@ local function core(x, z)
 		local dd = (x - lk.x) ^ 2 + (z - lk.z) ^ 2
 		if dd < (lk.r * 1.25) ^ 2 then
 			lastWater = max(lastWater, lk.level)
-			lastFrozen = lk.frozen
+			-- frozen ponds keep open water in the middle; ice only along the shore
+			lastFrozen = lk.frozen and sqrt(dd) > lk.r * (0.6 + 0.08 * n2(x, z, 1 / 40, 71))
 			lastLakebed = h < lk.level + 1
 		end
 	end
@@ -1333,13 +1686,7 @@ function Landscape.init()
 		})
 	end
 
-	-- Forest lake with a rocky hill on its far side for the waterfall
 	local lake = L.ForestLake
-	local outward = lake.Unit
-	local hillPos = lake + outward * 360
-	table.insert(hills, { x = hillPos.X, z = hillPos.Z, r = 170, h = 85 })
-	Landscape.WaterfallHill = hillPos
-
 	local function addLake(pos, r, depth, frozen)
 		local level = math.huge
 		for k = 0, 47 do
@@ -1353,6 +1700,31 @@ function Landscape.init()
 	end
 	Landscape.ForestLakeLevel = addLake(lake, 330, 24, false)
 	Landscape.SnowPondLevel = addLake(L.SnowPond, 120, 10, true)
+
+	-- Rocky plateau on the far side of Mirror Lake. Its lake-facing cliff runs along a
+	-- voxel grid line so the terrain-water waterfall pouring off it has straight edges.
+	do
+		local out = lake.Unit
+		local fx, fz = 0, 0 -- direction from the plateau toward the lake (a cardinal axis)
+		if abs(out.X) > abs(out.Z) then
+			fx = out.X > 0 and -1 or 1
+		else
+			fz = out.Z > 0 and -1 or 1
+		end
+		local r = 124
+		local cx = floor((lake.X - fx * (r + 200)) / 4 + 0.5) * 4
+		local cz = floor((lake.Z - fz * (r + 200)) / 4 + 0.5) * 4
+		local center = Vector3.new(cx, 0, cz)
+		local top = floor((rawHeight(center, true) + 72) / 4) * 4
+		table.insert(plateaus, { x = cx, z = cz, fx = fx, fz = fz, r = r, steep = 6, gentle = 150, top = top, reach = r + 200 })
+		Landscape.Waterfall = {
+			center = Vector3.new(cx, top, cz),
+			f = Vector3.new(fx, 0, fz),
+			r = r,
+			top = top,
+			level = Landscape.ForestLakeLevel,
+		}
+	end
 
 	-- Flattened building sites
 	local function addPad(pos, r, fall, raise)
@@ -1527,7 +1899,7 @@ return Landscape
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000006">
+		<Item class="ModuleScript" referent="RBX00000007">
 			<Properties>
 				<string name="Name">Props</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -1538,6 +1910,7 @@ return Landscape
 
 local Layout = require(script.Parent.IslandLayout)
 local Util = require(script.Parent.Util)
+local AssetLibrary = require(script.Parent.AssetLibrary)
 
 local Props = {}
 
@@ -1573,7 +1946,21 @@ function Props.randomTemplate(rng, list)
 end
 
 -- Palm tree ---------------------------------------------------------------------
+-- Every tree/plant list below prefers the detailed Blender meshes (in a few tints)
+-- and falls back to part-built versions when they aren't imported.
+local function tints(style, colors)
+	local list = {}
+	for _, c in ipairs(colors) do
+		table.insert(list, { [style] = c })
+	end
+	return list
+end
+
 function Props.palms()
+	local meshes = AssetLibrary.templates({ "Palm_A", "Palm_B" }, tints("Frond", { rgb(72, 134, 54), rgb(88, 148, 58), rgb(62, 120, 50) }))
+	if meshes then
+		return meshes
+	end
 	return variants("Palm", 5, 101, function(m, rng)
 		local H = rng:NextNumber(26, 36)
 		local lean = rng:NextNumber(3, 9)
@@ -1646,39 +2033,64 @@ local function canopyTree(m, rng, leafColors, H, trunkD, puffs, puffSize)
 end
 
 function Props.forestTrees()
+	local meshes = AssetLibrary.templates({ "Broadleaf_A", "Broadleaf_B", "Broadleaf_C" }, tints("Leaves", { FOREST_LEAVES[1], FOREST_LEAVES[2], FOREST_LEAVES[5] }))
+	if meshes then
+		return meshes
+	end
 	return variants("WildwoodTree", 8, 202, function(m, rng)
 		canopyTree(m, rng, FOREST_LEAVES, rng:NextNumber(24, 36), rng:NextNumber(2.6, 3.8), 5, rng:NextNumber(15, 21))
 	end)
 end
 
+-- Petals drifting down from a blossom tree's canopy.
+local function addPetals(m, color, height)
+	if m:FindFirstChild("Petals") then
+		return -- templates are shared, add this once
+	end
+	local glow = box(m, CFrame.new(0, height, 0), Vector3.new(1, 1, 1), color, M.SmoothPlastic, {
+		collide = false,
+		shadow = false,
+		transparency = 1,
+	})
+	glow.Name = "Petals"
+	Util.particles(glow, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(color),
+		Size = Util.ns(0, 0.5, 1, 0.3),
+		Transparency = Util.ns(0, 0.2, 1, 1),
+		Lifetime = NumberRange.new(5, 8),
+		Rate = 2,
+		Speed = NumberRange.new(0.5, 1.5),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0.6, -1.2, 0.3),
+		Rotation = NumberRange.new(0, 360),
+		RotSpeed = NumberRange.new(-40, 40),
+		Shape = Enum.ParticleEmitterShape.Sphere,
+	})
+end
+
 function Props.blossomTrees()
+	local meshes = AssetLibrary.templates({ "Blossom_A", "Blossom_B" }, tints("Blossom", BLOSSOMS))
+	if meshes then
+		for _, t in ipairs(meshes) do
+			local blossom = AssetLibrary.piece(t, "Blossom")
+			addPetals(t, blossom and blossom.Color or BLOSSOMS[1], 18)
+		end
+		return meshes
+	end
 	return variants("BlossomTree", 4, 203, function(m, rng, i)
 		local petals = { BLOSSOMS[(i - 1) % #BLOSSOMS + 1] }
 		canopyTree(m, rng, petals, rng:NextNumber(20, 28), rng:NextNumber(2.4, 3.2), 5, rng:NextNumber(13, 18))
-		local glow = box(m, CFrame.new(0, 24, 0), Vector3.new(1, 1, 1), petals[1], M.SmoothPlastic, {
-			collide = false,
-			shadow = false,
-			transparency = 1,
-		})
-		Util.particles(glow, {
-			Texture = Util.TEX.sparkle,
-			Color = Util.cs(petals[1]),
-			Size = Util.ns(0, 0.5, 1, 0.3),
-			Transparency = Util.ns(0, 0.2, 1, 1),
-			Lifetime = NumberRange.new(5, 8),
-			Rate = 2,
-			Speed = NumberRange.new(0.5, 1.5),
-			SpreadAngle = Vector2.new(180, 180),
-			Acceleration = Vector3.new(0.6, -1.2, 0.3),
-			Rotation = NumberRange.new(0, 360),
-			RotSpeed = NumberRange.new(-40, 40),
-			Shape = Enum.ParticleEmitterShape.Sphere,
-		})
+		addPetals(m, petals[1], 24)
 	end)
 end
 
 -- Slender pale-barked trees
 function Props.slenderTrees()
+	local meshes = AssetLibrary.templates({ "SilverTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("SilverTree", 3, 204, function(m, rng)
 		local H = rng:NextNumber(34, 46)
 		local bark = rgb(226, 222, 210)
@@ -1696,6 +2108,10 @@ end
 
 -- Rare giant trees with hanging vines and glowing mushrooms
 function Props.ancientTrees()
+	local meshes = AssetLibrary.templates({ "AncientTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("AncientTree", 3, 205, function(m, rng)
 		local H = rng:NextNumber(70, 92)
 		local D = rng:NextNumber(13, 17)
@@ -1758,6 +2174,10 @@ local function pineTier(m, y, radius, height, color, material, turn)
 end
 
 function Props.pines()
+	local meshes = AssetLibrary.templates({ "Pine_A", "Pine_B", "Pine_C" })
+	if meshes then
+		return meshes
+	end
 	return variants("SnowPine", 8, 301, function(m, rng, i)
 		local H = rng:NextNumber(38, 62)
 		local bark = rgb(74, 56, 44)
@@ -1782,6 +2202,10 @@ end
 
 -- Bare winter tree (no leaves), used around the village and temple.
 function Props.bareTrees()
+	local meshes = AssetLibrary.templates({ "BareTree" })
+	if meshes then
+		return meshes
+	end
 	return variants("BareTree", 3, 302, function(m, rng)
 		local bark = rgb(60, 48, 42)
 		local function branch(from, dir, len, d, depth)
@@ -1802,6 +2226,10 @@ end
 
 -- Crystal-white dead trees of the Hollow Expanse
 function Props.quartzTrees()
+	local meshes = AssetLibrary.templates({ "QuartzTree_A", "QuartzTree_B" })
+	if meshes then
+		return meshes
+	end
 	return variants("QuartzTree", 6, 401, function(m, rng)
 		local color = rgb(236, 240, 246)
 		local function branch(from, dir, len, d, depth)
@@ -1822,6 +2250,10 @@ end
 
 -- Bushes --------------------------------------------------------------------------------
 function Props.bushes()
+	local meshes = AssetLibrary.templates({ "Bush_A", "Bush_B" }, tints("Leaves", { FOREST_LEAVES[1], FOREST_LEAVES[3], FOREST_LEAVES[4] }))
+	if meshes then
+		return meshes
+	end
 	return variants("Bush", 6, 501, function(m, rng, i)
 		local leaf = Util.vary(rng, FOREST_LEAVES[(i - 1) % #FOREST_LEAVES + 1], 0.08)
 		for b = 1, rng:NextInteger(2, 3) do
@@ -1841,9 +2273,22 @@ end
 
 -- Japanese stone lantern (toro). position is the ground point.
 function Props.stoneLantern(parent, position, yaw, snowy)
+	local cf = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
+	local mesh = AssetLibrary.place("StoneLantern", parent, cf)
+	if mesh then
+		local fx = AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 7.8), "Light")
+		Util.pointLight(fx, rgb(255, 178, 96), 1.4, 22, false)
+		if not snowy then
+			for _, p in ipairs(mesh:GetChildren()) do
+				if p:GetAttribute("Style") == "Snow" then
+					p:Destroy()
+				end
+			end
+		end
+		return mesh
+	end
 	local m = Util.model(parent, "StoneLantern")
 	local stone = rgb(150, 148, 142)
-	local cf = CFrame.new(position) * CFrame.Angles(0, yaw or 0, 0)
 	box(m, cf * CFrame.new(0, 0.6, 0), Vector3.new(4.4, 1.2, 4.4), stone, M.Granite)
 	column(m, (cf * CFrame.new(0, 1.2, 0)).Position, 4.5, 1.8, stone, M.Granite)
 	box(m, cf * CFrame.new(0, 6, 0), Vector3.new(3.6, 0.8, 3.6), stone, M.Granite)
@@ -1871,6 +2316,13 @@ end
 -- Tall street lamp with a warm lantern.
 function Props.streetLamp(parent, position, height)
 	height = height or 14
+	local scale = height / 13.4
+	local mesh = AssetLibrary.place("StreetLamp", parent, CFrame.new(position), scale)
+	if mesh then
+		local fx = AssetLibrary.anchor(mesh, CFrame.new(position), Vector3.new(0, 0, 15.4), "Light")
+		Util.pointLight(fx, rgb(255, 196, 120), 1.5, 30, false)
+		return mesh
+	end
 	local m = Util.model(parent, "Lamp")
 	local metal = rgb(62, 56, 48)
 	column(m, position, height, 0.8, metal, M.Metal)
@@ -1917,6 +2369,10 @@ end
 
 -- Giant skeleton half buried in sand: spine, ribs and a horned skull.
 function Props.giantSkeleton(parent, rng, position, yaw, scale)
+	local mesh = AssetLibrary.place("Skeleton", parent, CFrame.new(position) * CFrame.Angles(0, yaw, 0), scale)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "AncientRemains")
 	local bone = rgb(232, 226, 208)
 	local cf = CFrame.new(position) * CFrame.Angles(0, yaw, 0)
@@ -1957,8 +2413,12 @@ end
 -- Burnt-out car for the ruined city.
 local CAR_PAINT = { rgb(110, 58, 40), rgb(70, 70, 74), rgb(140, 128, 108), rgb(96, 40, 36), rgb(52, 64, 72), rgb(150, 120, 60) }
 function Props.wreckedCar(parent, rng, groundCF)
-	local m = Util.model(parent, "WreckedCar")
 	local paint = Util.vary(rng, Util.pick(rng, CAR_PAINT), 0.1)
+	local mesh = AssetLibrary.place(rng:NextNumber() < 0.6 and "Car_A" or "Car_B", parent, groundCF, 1, { Paint = paint })
+	if mesh then
+		return mesh
+	end
+	local m = Util.model(parent, "WreckedCar")
 	local rust = rgb(102, 62, 40)
 	local glass = rgb(20, 22, 26)
 	box(m, groundCF * CFrame.new(0, 2.4, 0), Vector3.new(7, 2.6, 15), paint, M.CorrodedMetal)
@@ -2022,7 +2482,7 @@ return Props
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000007">
+		<Item class="ModuleScript" referent="RBX00000008">
 			<Properties>
 				<string name="Name">TerrainWriter</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -2035,6 +2495,7 @@ return Props
 local Layout = require(script.Parent.IslandLayout)
 local Landscape = require(script.Parent.Landscape)
 local Util = require(script.Parent.Util)
+local Waterworks = require(script.Parent.Waterworks)
 
 local TerrainWriter = {}
 
@@ -2235,6 +2696,8 @@ function TerrainWriter.Generate()
 			Util.log(string.format("Terrain %d%% (%d island chunks, %.0fs)", pct, landChunks, os.clock() - started))
 		end
 	end
+	-- fountains, pools and the waterfall are terrain water too
+	Waterworks.Build()
 end
 
 -- Terrain shapes added on top of the base landscape -----------------------------
@@ -2287,7 +2750,7 @@ return TerrainWriter
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000008">
+		<Item class="ModuleScript" referent="RBX00000009">
 			<Properties>
 				<string name="Name">Util</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -2617,7 +3080,7 @@ return Util
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="ModuleScript" referent="RBX00000009">
+		<Item class="ModuleScript" referent="RBX0000000A">
 			<Properties>
 				<string name="Name">Watchtower</string>
 				<ProtectedString name="Source"><![CDATA[--[[
@@ -2636,6 +3099,7 @@ return Util
 ]]
 
 local Util = require(script.Parent.Util)
+local AssetLibrary = require(script.Parent.AssetLibrary)
 
 local Watchtower = {}
 
@@ -2744,7 +3208,7 @@ local function horn(m, T, side, style, inset, scale, depthScale)
 		local across = Vector3.new(d.Y, -d.X, 0) * side
 		local w = (92 * (1 - t) ^ 1.2 + 3) * scale + math.max(0, 1 - t * 8) * 40 * scale
 		local dep = (50 * (1 - t) ^ 1.1 + 2) * depthScale
-		local mid = (a + b) / 2 + across * (inset * w)
+		local mid = (a + b) / 2 + across * (inset * w / scale) -- a stripe runs along the horn's inner edge
 		local cf = T * CFrame.fromMatrix(mid, across, d)
 		box(m, cf, Vector3.new(w, (b - a).Magnitude + 2, dep), style.color, style.material)
 	end
@@ -3011,13 +3475,27 @@ end
 function Watchtower.Build(parent, base, front)
 	front = Vector3.new(front.X, 0, front.Z).Unit
 	local T = CFrame.lookAt(base, base + front) -- local -Z is the entrance side
-	local source = Watchtower.findImported()
-	local m = source and placeImported(parent, source, base, front)
+	local m = AssetLibrary.place("Watchtower", parent, T)
 	if m then
-		Util.log("  using the imported PleiadesWatchtower mesh")
-	else
-		m = buildParts(parent, T)
+		m.Name = "PleiadesWatchtower"
 		m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for _, p in ipairs(m:GetDescendants()) do
+			local style = p:IsA("BasePart") and STYLE[p:GetAttribute("Style")]
+			if style then
+				p.Color = style.color
+				p.Material = style.material
+			end
+		end
+		Util.log("  using the Watchtower mesh from " .. AssetLibrary.IMPORT_NAME)
+	else
+		local source = Watchtower.findImported()
+		m = source and placeImported(parent, source, base, front)
+		if m then
+			Util.log("  using the imported PleiadesWatchtower mesh")
+		else
+			m = buildParts(parent, T)
+			m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		end
 	end
 
 	local extras = Util.model(parent, "WatchtowerLights")
@@ -3053,11 +3531,136 @@ return Watchtower
 ]]></ProtectedString>
 			</Properties>
 		</Item>
-		<Item class="Folder" referent="RBX00000012">
+		<Item class="ModuleScript" referent="RBX0000000B">
+			<Properties>
+				<string name="Name">Waterworks</string>
+				<ProtectedString name="Source"><![CDATA[--[[
+	Waterworks
+	Real (terrain) water for the built water features: the capital's fountain
+	basins and their upper bowls, the reflecting pools in front of the palace,
+	and the waterfall that pours off the plateau into Mirror Lake (a spring pool,
+	a stream to the cliff edge and the falling curtain of water).
+
+	Terrain water comes in 4-stud voxels, so every feature here lines up with
+	that grid; the stone rims around them then hide nothing and the water
+	edges stay perfectly straight. Players can swim in all of it.
+]]
+
+local Layout = require(script.Parent.IslandLayout)
+local Landscape = require(script.Parent.Landscape)
+
+local Waterworks = {}
+
+local function snap(v)
+	return math.floor(v / 4 + 0.5) * 4
+end
+Waterworks.snap = snap
+
+local TOP = Layout.HUB_HEIGHT
+Waterworks.BASIN_TOP = math.floor((TOP + 2) / 4) * 4 -- fountain water surface (152 on the default mesa)
+Waterworks.BASIN_HALF = 12 -- the basin holds a 24 x 24 stud square of water
+Waterworks.BOWL_HALF = 4 -- the upper bowl holds 8 x 8
+
+-- Fountain plaza centres on each avenue of the capital, snapped to the voxel grid.
+function Waterworks.fountainCenters()
+	local out = {}
+	for _, id in ipairs(Layout.ZONE_ORDER) do
+		local p = Layout.zoneDirection(id) * 412
+		table.insert(out, Vector3.new(snap(p.X), TOP, snap(p.Z)))
+	end
+	return out
+end
+
+-- Two long pools flanking the approach to the palace. Only built when the Forest
+-- avenue runs along a world axis (true for the default layout).
+function Waterworks.palacePools()
+	local dir = Layout.zoneDirection("Forest")
+	if math.abs(dir.X) > 1e-6 and math.abs(dir.Z) > 1e-6 then
+		return {}
+	end
+	dir = Vector3.new(math.round(dir.X), 0, math.round(dir.Z))
+	local side = Vector3.new(-dir.Z, 0, dir.X)
+	local floorY = TOP + 12 -- top of the first palace terrace
+	local bottom = math.floor(floorY / 4) * 4
+	local pools = {}
+	for _, s in ipairs({ -1, 1 }) do
+		local a = dir * 164 + side * (s * 28)
+		local b = dir * 216 + side * (s * 44)
+		table.insert(pools, {
+			min = Vector3.new(math.min(a.X, b.X), bottom, math.min(a.Z, b.Z)),
+			max = Vector3.new(math.max(a.X, b.X), bottom + 4, math.max(a.Z, b.Z)),
+			floorY = floorY,
+		})
+	end
+	return pools
+end
+
+local function rect(list, p0, p1, side, half, y0, y1)
+	local a = p0 + side * half
+	local b = p1 - side * half
+	table.insert(list, {
+		min = Vector3.new(math.min(a.X, b.X), y0, math.min(a.Z, b.Z)),
+		max = Vector3.new(math.max(a.X, b.X), y1, math.max(a.Z, b.Z)),
+	})
+end
+
+-- The waterfall's water: spring pool, stream and curtain (or nil if there is no plateau).
+function Waterworks.waterfallParts()
+	local wf = Landscape.Waterfall
+	if not wf then
+		return nil
+	end
+	local f = wf.f
+	local side = Vector3.new(-f.Z, 0, f.X)
+	local c = Vector3.new(wf.center.X, 0, wf.center.Z)
+	local parts = {}
+	rect(parts, c + f * (wf.r - 84), c + f * (wf.r - 60), side, 12, wf.top - 8, wf.top) -- spring pool
+	rect(parts, c + f * (wf.r - 60), c + f * wf.r, side, 4, wf.top - 4, wf.top) -- stream
+	local bottom = math.floor(wf.level / 4) * 4 - 8
+	rect(parts, c + f * wf.r, c + f * (wf.r + 4), side, 8, bottom, wf.top) -- falling curtain
+	return parts, wf
+end
+
+function Waterworks.regions()
+	local list = {}
+	local top = Waterworks.BASIN_TOP
+	for _, c in ipairs(Waterworks.fountainCenters()) do
+		local h, b = Waterworks.BASIN_HALF, Waterworks.BOWL_HALF
+		table.insert(list, { min = Vector3.new(c.X - h, top - 8, c.Z - h), max = Vector3.new(c.X + h, top, c.Z + h) })
+		table.insert(list, { min = Vector3.new(c.X - b, top + 4, c.Z - b), max = Vector3.new(c.X + b, top + 8, c.Z + b) })
+	end
+	for _, p in ipairs(Waterworks.palacePools()) do
+		table.insert(list, { min = p.min, max = p.max })
+	end
+	local fall = Waterworks.waterfallParts()
+	if fall then
+		for _, r in ipairs(fall) do
+			table.insert(list, { min = Vector3.new(r.min.X, r.min.Y, r.min.Z), max = Vector3.new(r.max.X, r.max.Y, r.max.Z) })
+		end
+	end
+	return list
+end
+
+-- Fill every water feature with terrain water (run after the terrain is written).
+function Waterworks.Build()
+	local terrain = workspace.Terrain
+	for _, r in ipairs(Waterworks.regions()) do
+		local size = r.max - r.min
+		if size.X > 0 and size.Y > 0 and size.Z > 0 then
+			terrain:FillBlock(CFrame.new((r.min + r.max) / 2), size, Enum.Material.Water)
+		end
+	end
+end
+
+return Waterworks
+]]></ProtectedString>
+			</Properties>
+		</Item>
+		<Item class="Folder" referent="RBX00000014">
 			<Properties>
 				<string name="Name">Zones</string>
 			</Properties>
-			<Item class="ModuleScript" referent="RBX0000000A">
+			<Item class="ModuleScript" referent="RBX0000000C">
 				<Properties>
 					<string name="Name">Coast</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -3073,6 +3676,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Coast = {}
 
@@ -3119,7 +3723,49 @@ local function iceChunks(parent, rng, pos)
 end
 
 -- Lighthouse --------------------------------------------------------------------------------------------
+local function lamp(part, seaDir)
+	local spot = Instance.new("SpotLight")
+	spot.Face = Enum.NormalId.Front
+	spot.Angle = 40
+	spot.Range = 60
+	spot.Brightness = 6
+	spot.Color = rgb(255, 236, 190)
+	spot.Parent = part
+	part.CFrame = CFrame.lookAt(part.Position, part.Position + seaDir)
+	Util.pointLight(part, rgb(255, 236, 190), 3, 60)
+end
+
+-- The mesh version stands on a rocky knoll; its keeper's cottage is 32 studs inland.
+local function lighthouseMesh(parent, rng, pos, seaDir)
+	if not AssetLibrary.has("Lighthouse") then
+		return nil
+	end
+	local probe = CFrame.lookAt(pos, pos + seaDir)
+	local house = (probe * CFrame.new(AssetLibrary.fromBlender(0, 32, 0))).Position
+	local houseGround = Landscape.heightAt(house.X, house.Z)
+	local y = math.max(pos.Y, houseGround)
+	local base = Vector3.new(pos.X, y, pos.Z)
+	local cf = CFrame.lookAt(base, base + seaDir)
+	local terrain = workspace.Terrain
+	TerrainWriter.boulder(rng, pos + Vector3.new(0, -4, 0), 22, M.Rock)
+	terrain:FillCylinder(CFrame.new(pos.X, (pos.Y + y) / 2 - 4, pos.Z), y - pos.Y + 8, 16, M.Rock)
+	if houseGround < y - 0.5 then
+		terrain:FillBlock(CFrame.new(house.X, (houseGround + y) / 2 - 2, house.Z) * cf.Rotation, Vector3.new(20, y - houseGround + 4, 16), M.Sand)
+	end
+	local m = AssetLibrary.place("Lighthouse", parent, cf)
+	m.Name = "OldLighthouse"
+	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	lamp(AssetLibrary.anchor(m, cf, Vector3.new(0, 0, 84.8), "Lamp"), seaDir)
+	local window = AssetLibrary.anchor(m, cf, Vector3.new(0, 25.6, 5.6), "WindowGlow")
+	Util.surfaceLight(window, Enum.NormalId.Front, rgb(255, 200, 130), 1, 12)
+	return m
+end
+
 local function lighthouse(parent, rng, pos, seaDir)
+	local mesh = lighthouseMesh(parent, rng, pos, seaDir)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "OldLighthouse")
 	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
 	TerrainWriter.boulder(rng, pos + Vector3.new(0, -4, 0), 22, M.Rock)
@@ -3138,16 +3784,7 @@ local function lighthouse(parent, rng, pos, seaDir)
 		box(m, CFrame.new(base + Vector3.new(math.cos(a) * 10.5, y + 2.5, math.sin(a) * 10.5)), Vector3.new(0.5, 3, 0.5), rgb(40, 40, 44), M.Metal, NOSHADOW)
 	end
 	column(m, base + Vector3.new(0, y + 1, 0), 10, 12, rgb(220, 240, 255), M.Glass, { transparency = 0.5, reflectance = 0.2 })
-	local lamp = ball(m, base + Vector3.new(0, y + 6, 0), 6, rgb(255, 240, 190), M.Neon, NOSHADOW)
-	local spot = Instance.new("SpotLight")
-	spot.Face = Enum.NormalId.Front
-	spot.Angle = 40
-	spot.Range = 60
-	spot.Brightness = 6
-	spot.Color = rgb(255, 236, 190)
-	spot.Parent = lamp
-	lamp.CFrame = CFrame.lookAt(lamp.Position, lamp.Position + seaDir)
-	Util.pointLight(lamp, rgb(255, 236, 190), 3, 60)
+	lamp(ball(m, base + Vector3.new(0, y + 6, 0), 6, rgb(255, 240, 190), M.Neon, NOSHADOW), seaDir)
 	disc(m, base + Vector3.new(0, y + 11.5, 0), 1.4, 16, red, M.Metal)
 	ball(m, base + Vector3.new(0, y + 12, 0), 10, red, M.Metal)
 	ball(m, base + Vector3.new(0, y + 17.6, 0), 1.6, rgb(40, 40, 44), M.Metal)
@@ -3164,10 +3801,28 @@ local function lighthouse(parent, rng, pos, seaDir)
 end
 
 -- Shipwreck ----------------------------------------------------------------------------------------------
+-- Crates washed up around the wreck, and a chest half in the sand.
+local function flotsam(m, rng, pos, seaDir)
+	for _ = 1, 5 do
+		local p = ground(pos + Vector3.new(rng:NextNumber(-40, 40), 0, rng:NextNumber(-40, 40)))
+		box(m, CFrame.new(p + Vector3.new(0, 1, 0)) * CFrame.Angles(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, TAU), 0), Vector3.new(3.4, 3.4, 3.4), rgb(140, 104, 66), M.WoodPlanks)
+	end
+	local chest = box(m, CFrame.new(ground(pos + seaDir * -24) + Vector3.new(0, 1.2, 0)), Vector3.new(4, 2.6, 2.6), rgb(110, 70, 40), M.WoodPlanks)
+	chest.Name = "Chest"
+	box(m, chest.CFrame * CFrame.new(0, 0.2, -1.35), Vector3.new(4.2, 0.4, 0.2), rgb(214, 172, 74), M.Foil, NOCOL_NOSHADOW)
+end
+
 local function shipwreck(parent, rng, pos, seaDir)
-	local m = Util.model(parent, "Shipwreck")
+	local along = Vector3.new(-seaDir.Z, 0, seaDir.X)
+	local mesh = AssetLibrary.place("Shipwreck", parent, CFrame.lookAt(pos - Vector3.new(0, 3, 0), pos - Vector3.new(0, 3, 0) + along) * CFrame.Angles(0, 0, 0.35))
+	local m = mesh or Util.model(parent, "Shipwreck")
+	m.Name = "Shipwreck"
+	if mesh then
+		flotsam(m, rng, pos, seaDir)
+		return m
+	end
 	local hull = rgb(92, 66, 46)
-	local cf = CFrame.lookAt(pos, pos + Vector3.new(-seaDir.Z, 0, seaDir.X)) * CFrame.Angles(0, 0, 0.35) * CFrame.new(0, 2, 0)
+	local cf = CFrame.lookAt(pos, pos + along) * CFrame.Angles(0, 0, 0.35) * CFrame.new(0, 2, 0)
 	box(m, cf * CFrame.new(0, 0, 0), Vector3.new(20, 3, 60), hull, M.WoodPlanks)
 	for _, s in ipairs({ -1, 1 }) do
 		box(m, cf * CFrame.new(s * 10, 5, 0) * CFrame.Angles(0, 0, s * 0.25), Vector3.new(2, 12, 58), hull, M.WoodPlanks)
@@ -3185,13 +3840,7 @@ local function shipwreck(parent, rng, pos, seaDir)
 	rod(m, (cf * CFrame.new(-12, 36, -5)).Position, (cf * CFrame.new(14, 38, -6)).Position, 1, rgb(80, 58, 40), M.Wood, NOSHADOW)
 	box(m, cf * CFrame.new(-2, 28, -5.3) * CFrame.Angles(0, 0, 0.08), Vector3.new(16, 14, 0.3), rgb(220, 210, 186), M.Fabric, NOCOL)
 	rod(m, (cf * CFrame.new(0, 8, 20)).Position, (cf * CFrame.new(16, -2, 34)).Position, 1.6, rgb(80, 58, 40), M.Wood)
-	for _ = 1, 5 do
-		local p = ground(pos + Vector3.new(rng:NextNumber(-40, 40), 0, rng:NextNumber(-40, 40)))
-		box(m, CFrame.new(p + Vector3.new(0, 1, 0)) * CFrame.Angles(rng:NextNumber(-0.3, 0.3), rng:NextNumber(0, TAU), 0), Vector3.new(3.4, 3.4, 3.4), rgb(140, 104, 66), M.WoodPlanks)
-	end
-	local chest = box(m, CFrame.new(ground(pos + seaDir * -24) + Vector3.new(0, 1.2, 0)), Vector3.new(4, 2.6, 2.6), rgb(110, 70, 40), M.WoodPlanks)
-	chest.Name = "Chest"
-	box(m, chest.CFrame * CFrame.new(0, 0.2, -1.35), Vector3.new(4.2, 0.4, 0.2), rgb(214, 172, 74), M.Foil, NOCOL_NOSHADOW)
+	flotsam(m, rng, pos, seaDir)
 	return m
 end
 
@@ -3291,7 +3940,7 @@ return Coast
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000B">
+			<Item class="ModuleScript" referent="RBX0000000D">
 				<Properties>
 					<string name="Name">Dunes</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -3308,6 +3957,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Watchtower = require(script.Parent.Parent.Watchtower)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Dunes = {}
 
@@ -3334,7 +3984,43 @@ local function ground(p)
 end
 
 -- Colossal buried statue and hand --------------------------------------------------------------------
+local HAND = AssetLibrary.fromBlender(110, -10, 0) -- where the mesh's hand comes out of the sand
+
+-- The statue mesh, sunk into the sand and looking up at the sky. It also holds
+-- the hand, so pick the heading where the ground under the hand is closest in
+-- height and roll the statue a little to make up the rest.
+local function statueMesh(parent, rng, pos)
+	if not AssetLibrary.has("Colossus") then
+		return nil
+	end
+	local best, bestDiff
+	local start = rng:NextNumber(0, TAU)
+	for k = 0, 11 do
+		local a = start + k / 12 * TAU
+		local face = Vector3.new(math.cos(a), 0, math.sin(a))
+		local hand = (flatCF(pos, face) * CFrame.new(HAND)).Position
+		local diff = math.abs(Landscape.heightAt(hand.X, hand.Z) - pos.Y)
+		if not best or diff < bestDiff then
+			best, bestDiff = face, diff
+		end
+	end
+	local cf = flatCF(pos - Vector3.new(0, 18, 0), best) * CFrame.Angles(0.25, 0, 0)
+	local hand = (cf * CFrame.new(HAND)).Position
+	local want = Landscape.heightAt(hand.X, hand.Z) - 3
+	local roll = math.clamp(math.asin(math.clamp((hand.Y - want) / HAND.Magnitude, -1, 1)), -0.3, 0.3)
+	cf = cf * CFrame.Angles(0, 0, roll)
+	local m = AssetLibrary.place("Colossus", parent, cf)
+	m.Name = "BuriedColossus"
+	-- sand drifted around the wrist
+	workspace.Terrain:FillBall((cf * CFrame.new(HAND)).Position - Vector3.new(0, 4, 0), 12, M.Sand)
+	return m
+end
+
 local function buriedStatue(parent, rng, pos)
+	local mesh = statueMesh(parent, rng, pos)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "BuriedColossus")
 	local face = Vector3.new(rng:NextNumber(-1, 1), 0, rng:NextNumber(-1, 1)).Unit
 	local cf = flatCF(pos - Vector3.new(0, 18, 0), face) * CFrame.Angles(0.25, 0, 0.18)
@@ -3369,6 +4055,11 @@ end
 
 -- Lost caravan -------------------------------------------------------------------------------------------
 local function caravan(parent, rng, pos)
+	local mesh = AssetLibrary.place("Caravan", parent, CFrame.new(pos - Vector3.new(0, 1, 0)) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0) * CFrame.Angles(0, 0, 0.08))
+	if mesh then
+		mesh.Name = "LostCaravan"
+		return mesh
+	end
 	local m = Util.model(parent, "LostCaravan")
 	local cf = CFrame.new(pos - Vector3.new(0, 1.5, 0)) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0) * CFrame.Angles(0, 0, 0.2)
 	local wood = rgb(120, 86, 56)
@@ -3455,7 +4146,7 @@ return Dunes
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000C">
+			<Item class="ModuleScript" referent="RBX0000000E">
 				<Properties>
 					<string name="Name">Forest</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -3472,6 +4163,8 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
+local Waterworks = require(script.Parent.Parent.Waterworks)
 
 local Forest = {}
 
@@ -3499,10 +4192,55 @@ local function ground(p)
 end
 
 -- World tree --------------------------------------------------------------------------------
+-- Spirit motes around the crown and glowing rune stones around the roots.
+local function worldTreeExtras(m, base, rng)
+	-- drifting spirit motes all around the crown
+	local motes = box(m, CFrame.new(base + Vector3.new(0, 190, 0)), Vector3.new(260, 160, 260), rgb(255, 255, 255), M.SmoothPlastic, {
+		collide = false,
+		shadow = false,
+		transparency = 1,
+	})
+	motes.CanQuery = false
+	Util.particles(motes, {
+		Texture = Util.TEX.sparkle,
+		Color = Util.cs(rgb(200, 255, 170), rgb(255, 230, 140)),
+		Size = Util.ns(0, 0, 0.3, 1.2, 1, 0),
+		Lifetime = NumberRange.new(6, 10),
+		Rate = 40,
+		Speed = NumberRange.new(0.5, 2),
+		SpreadAngle = Vector2.new(180, 180),
+		Acceleration = Vector3.new(0, -0.4, 0),
+		LightEmission = 1,
+		Shape = Enum.ParticleEmitterShape.Box,
+	})
+
+	-- rune stones around the roots
+	for k = 0, 9 do
+		local a = k / 10 * TAU
+		local p = ground(base + Vector3.new(math.cos(a) * 150, 0, math.sin(a) * 150))
+		local cf = flatCF(p, base - p) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), 0, rng:NextNumber(-0.08, 0.08))
+		box(m, cf * CFrame.new(0, 6, 0), Vector3.new(6, 16, 3), STONE, M.Slate)
+		box(m, cf * CFrame.new(0, 14.4, 0), Vector3.new(6.4, 1.2, 3.4), MOSS, M.Grass, NOSHADOW)
+		box(m, cf * CFrame.new(0, 7, -1.55), Vector3.new(0.8, 9, 0.2), rgb(120, 255, 200), M.Neon, NOCOL_NOSHADOW)
+	end
+end
+
 local function buildWorldTree(parent, rng)
+	local base = Vector3.new(L.WorldTree.X, Landscape.WorldTreeHeight - 2, L.WorldTree.Z)
+	local mesh = AssetLibrary.place("WorldTree", parent, CFrame.new(base))
+	if mesh then
+		mesh.Name = "Elderheart_WorldTree"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for k = 0, 5 do
+			local a = k / 6 * TAU
+			local fx = AssetLibrary.anchor(mesh, CFrame.new(base), Vector3.new(math.cos(a) * 70, math.sin(a) * 70, 150), "SpiritLight")
+			Util.pointLight(fx, rgb(150, 255, 210), 1.5, 40)
+		end
+		worldTreeExtras(mesh, base, rng)
+		return mesh
+	end
 	local m = Util.model(parent, "Elderheart_WorldTree")
 	m.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
-	local base = Vector3.new(L.WorldTree.X, Landscape.WorldTreeHeight - 2, L.WorldTree.Z)
 	local H = 230
 
 	-- six strands twisting around each other form the trunk
@@ -3570,35 +4308,7 @@ local function buildWorldTree(parent, rng)
 		end
 	end
 
-	-- drifting spirit motes all around the crown
-	local motes = box(m, CFrame.new(base + Vector3.new(0, 190, 0)), Vector3.new(260, 160, 260), rgb(255, 255, 255), M.SmoothPlastic, {
-		collide = false,
-		shadow = false,
-		transparency = 1,
-	})
-	motes.CanQuery = false
-	Util.particles(motes, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(200, 255, 170), rgb(255, 230, 140)),
-		Size = Util.ns(0, 0, 0.3, 1.2, 1, 0),
-		Lifetime = NumberRange.new(6, 10),
-		Rate = 40,
-		Speed = NumberRange.new(0.5, 2),
-		SpreadAngle = Vector2.new(180, 180),
-		Acceleration = Vector3.new(0, -0.4, 0),
-		LightEmission = 1,
-		Shape = Enum.ParticleEmitterShape.Box,
-	})
-
-	-- rune stones around the roots
-	for k = 0, 9 do
-		local a = k / 10 * TAU
-		local p = ground(base + Vector3.new(math.cos(a) * 150, 0, math.sin(a) * 150))
-		local cf = flatCF(p, base - p) * CFrame.Angles(rng:NextNumber(-0.08, 0.08), 0, rng:NextNumber(-0.08, 0.08))
-		box(m, cf * CFrame.new(0, 6, 0), Vector3.new(6, 16, 3), STONE, M.Slate)
-		box(m, cf * CFrame.new(0, 14.4, 0), Vector3.new(6.4, 1.2, 3.4), MOSS, M.Grass, NOSHADOW)
-		box(m, cf * CFrame.new(0, 7, -1.55), Vector3.new(0.8, 9, 0.2), rgb(120, 255, 200), M.Neon, NOCOL_NOSHADOW)
-	end
+	worldTreeExtras(m, base, rng)
 	return m
 end
 
@@ -3607,54 +4317,72 @@ local function buildLake(parent, rng)
 	local m = Util.model(parent, "MirrorLake")
 	local level = Landscape.ForestLakeLevel
 	local lake = L.ForestLake
-	local hill = Landscape.WaterfallHill
-	local toLake = (lake - hill).Unit
-	toLake = Vector3.new(toLake.X, 0, toLake.Z).Unit
-	local side = Vector3.new(-toLake.Z, 0, toLake.X)
-
-	-- cascade following the hill down to the water
-	local pts = {}
-	local p = Vector3.new(hill.X, 0, hill.Z) - toLake * 30
-	for _ = 1, 80 do
-		local h = Landscape.heightAt(p.X, p.Z)
-		table.insert(pts, Vector3.new(p.X, math.max(h, level) + 1.4, p.Z))
-		if h < level - 1 then
-			break
-		end
-		p += toLake * 10
-	end
+	local surface = math.ceil(level / 4) * 4 -- terrain water fills whole 4-stud voxels
 	local water = rgb(206, 236, 255)
-	for i = 1, #pts - 1 do
-		beam(m, pts[i], pts[i + 1], 30 - i * 0.2, 1.2, water, M.Glass, { collide = false, shadow = false, transparency = 0.35, reflectance = 0.15 })
-	end
-	local source = box(m, CFrame.new(pts[1]), Vector3.new(26, 2, 2), water, M.Glass, { collide = false, transparency = 1 })
-	Util.particles(source, {
-		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(230, 245, 255)),
-		Size = Util.ns(0, 1, 1, 0.3),
-		Transparency = Util.ns(0, 0.3, 1, 1),
-		Lifetime = NumberRange.new(1, 2),
-		Rate = 30,
-		Speed = NumberRange.new(4, 8),
-		SpreadAngle = Vector2.new(30, 10),
-	})
-	local foot = pts[#pts]
-	local mist = box(m, CFrame.new(foot + Vector3.new(0, 2, 0)), Vector3.new(30, 2, 10), water, M.Glass, { collide = false, transparency = 1 })
-	Util.particles(mist, {
-		Texture = Util.TEX.smoke,
-		Color = Util.cs(rgb(240, 248, 255)),
-		Size = Util.ns(0, 6, 1, 18),
-		Transparency = Util.ns(0, 0.6, 1, 1),
-		Lifetime = NumberRange.new(3, 5),
-		Rate = 10,
-		Speed = NumberRange.new(2, 5),
-		SpreadAngle = Vector2.new(60, 60),
-		Shape = Enum.ParticleEmitterShape.Box,
-	})
-	-- rocks along both banks of the cascade
-	for i = 1, #pts, 3 do
+
+	-- the waterfall itself is terrain water (see Waterworks); here: spray, streaks, mist and rocks
+	local parts, wf = Waterworks.waterfallParts()
+	if parts then
+		local f = wf.f
+		local side = Vector3.new(-f.Z, 0, f.X)
+		local lip = Vector3.new(wf.center.X, wf.top, wf.center.Z) + f * wf.r
+		local height = math.max(wf.top - surface, 8)
+		local sheetPos = lip + f * 4.6 + Vector3.new(0, -height / 2, 0)
+		local sheet = box(m, CFrame.lookAt(sheetPos, sheetPos + f), Vector3.new(16, height, 1), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		sheet.Name = "FallingWater"
+		sheet.CanQuery = false
+		Util.particles(sheet, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(255, 255, 255), rgb(200, 230, 250)),
+			Size = Util.ns(0, 2.2, 1, 3.4),
+			Transparency = Util.ns(0, 0.55, 0.7, 0.75, 1, 1),
+			Lifetime = NumberRange.new(0.8, 1.3),
+			Rate = 70,
+			Speed = NumberRange.new(2, 4),
+			Acceleration = Vector3.new(0, -46, 0),
+			EmissionDirection = Enum.NormalId.Bottom,
+			Shape = Enum.ParticleEmitterShape.Box,
+			LightInfluence = 1,
+		})
+		local spray = box(m, CFrame.lookAt(lip + f * 2 + Vector3.new(0, 0.6, 0), lip + f * 6 + Vector3.new(0, 0.6, 0)), Vector3.new(14, 1, 2), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		spray.Name = "LipSpray"
+		Util.particles(spray, {
+			Texture = Util.TEX.sparkle,
+			Color = Util.cs(rgb(235, 248, 255)),
+			Size = Util.ns(0, 0.8, 1, 0.3),
+			Transparency = Util.ns(0, 0.3, 1, 1),
+			Lifetime = NumberRange.new(0.8, 1.4),
+			Rate = 30,
+			Speed = NumberRange.new(4, 7),
+			SpreadAngle = Vector2.new(25, 10),
+			Acceleration = Vector3.new(0, -30, 0),
+			EmissionDirection = Enum.NormalId.Front,
+		})
+		local footPos = lip + f * 9 + Vector3.new(0, surface - wf.top + 1.5, 0)
+		local mist = box(m, CFrame.new(footPos), Vector3.new(26, 2, 12), water, M.Glass, { collide = false, shadow = false, transparency = 1 })
+		mist.Name = "Mist"
+		Util.particles(mist, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(240, 248, 255)),
+			Size = Util.ns(0, 6, 1, 20),
+			Transparency = Util.ns(0, 0.55, 1, 1),
+			Lifetime = NumberRange.new(3, 5),
+			Rate = 14,
+			Speed = NumberRange.new(2, 5),
+			SpreadAngle = Vector2.new(60, 60),
+			Shape = Enum.ParticleEmitterShape.Box,
+			LightInfluence = 1,
+		})
+		-- boulders framing the falls and the stream
 		for _, s in ipairs({ -1, 1 }) do
-			TerrainWriter.boulder(rng, pts[i] + side * s * rng:NextNumber(18, 26), rng:NextNumber(6, 10), M.Rock)
+			for k = 0, 3 do
+				local p = lip + side * s * rng:NextNumber(12, 16) + f * rng:NextNumber(1, 5) + Vector3.new(0, -k * height / 4, 0)
+				TerrainWriter.boulder(rng, p, rng:NextNumber(5, 8), M.Rock)
+			end
+			for k = 1, 4 do
+				local p = lip - f * (k * 14) + side * s * rng:NextNumber(7, 10) + Vector3.new(0, 1, 0)
+				TerrainWriter.boulder(rng, p, rng:NextNumber(2.5, 4), M.Rock)
+			end
 		end
 	end
 
@@ -3664,9 +4392,9 @@ local function buildLake(parent, rng)
 		local r = rng:NextNumber(60, 220)
 		local q = lake + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r)
 		if Landscape.heightAt(q.X, q.Z) < level - 2 then
-			disc(m, Vector3.new(q.X, level + 0.15, q.Z), 0.2, rng:NextNumber(3, 6), rgb(70, 140, 60), M.Grass, NOCOL_NOSHADOW)
+			disc(m, Vector3.new(q.X, surface + 0.15, q.Z), 0.2, rng:NextNumber(3, 6), rgb(70, 140, 60), M.Grass, NOCOL_NOSHADOW)
 			if rng:NextNumber() < 0.3 then
-				ball(m, Vector3.new(q.X, level + 0.6, q.Z), 1.2, rgb(250, 200, 220), M.SmoothPlastic, NOCOL_NOSHADOW)
+				ball(m, Vector3.new(q.X, surface + 0.6, q.Z), 1.2, rgb(250, 200, 220), M.SmoothPlastic, NOCOL_NOSHADOW)
 			end
 		end
 	end
@@ -3677,7 +4405,7 @@ local function buildLake(parent, rng)
 	local startP = lake + towardCenter * 300
 	local endP = lake + towardCenter * 230
 	local planks = rgb(132, 100, 70)
-	local deckY = level + 2.2
+	local deckY = surface + 2.2
 	local a0 = Vector3.new(startP.X, deckY, startP.Z)
 	local a1 = Vector3.new(endP.X, deckY, endP.Z)
 	local len = (a1 - a0).Magnitude
@@ -3702,9 +4430,62 @@ end
 -- Cottage -----------------------------------------------------------------------------------------
 local ROOFS = { rgb(70, 82, 104), rgb(128, 58, 48), rgb(84, 104, 66), rgb(96, 70, 60) }
 
+-- Picket fence, vegetable rows and a woodpile in front of a cottage.
+local function cottageGarden(m, rng, cf, W, D)
+	-- picket fence around a front garden
+	local fence = rgb(226, 216, 196)
+	local gardenFront = -D / 2 - 14
+	for x = -W / 2 - 4, W / 2 + 4, 3 do
+		if math.abs(x) > 3 then
+			local p = (cf * CFrame.new(x, 0, gardenFront)).Position
+			local g = Landscape.heightAt(p.X, p.Z)
+			box(m, CFrame.new(Vector3.new(p.X, g + 1.6, p.Z)) * cf.Rotation, Vector3.new(0.5, 4, 0.5), fence, M.Wood, NOSHADOW)
+		end
+	end
+	for _, s in ipairs({ -1, 1 }) do
+		local a = (cf * CFrame.new(s * 3, 0, gardenFront)).Position
+		local b = (cf * CFrame.new(s * (W / 2 + 4), 0, gardenFront)).Position
+		local ga, gb = Landscape.heightAt(a.X, a.Z), Landscape.heightAt(b.X, b.Z)
+		beam(m, Vector3.new(a.X, ga + 2.6, a.Z), Vector3.new(b.X, gb + 2.6, b.Z), 0.3, 0.6, fence, M.Wood, NOSHADOW)
+	end
+	-- vegetable rows and a woodpile
+	for row = 0, 2 do
+		local c = cf * CFrame.new(-W / 4, 0.3, -D / 2 - 5 - row * 3)
+		box(m, c, Vector3.new(8, 1, 1.6), rgb(92, 64, 44), M.Ground, NOSHADOW)
+		for k = -1, 1 do
+			ball(m, (c * CFrame.new(k * 2.5, 0.9, 0)).Position, 1.4, rgb(90, 160, 60), M.LeafyGrass, NOCOL_NOSHADOW)
+		end
+	end
+	for k = 0, 5 do
+		local c = cf * CFrame.new(W / 2 + 2 + (k % 3) * 1.5 + (k // 3) * 0.75, 1 + (k // 3) * 1.3, 0) * CFrame.Angles(0, HALF_PI, 0)
+		Util.cylinder(m, c, 6, 1.4, rgb(130, 96, 64), M.Wood, NOSHADOW)
+	end
+end
+
 local function cottage(parent, rng, pos, facing)
-	local m = Util.model(parent, "Cottage")
 	local cf = flatCF(pos, facing)
+	local mesh = AssetLibrary.place("Cottage", parent, cf, 1, { Shingle = Util.pick(rng, ROOFS) })
+	if mesh then
+		local smoke = AssetLibrary.anchor(mesh, cf, Vector3.new(8, 4.5, 28.4), "ChimneySmoke")
+		Util.particles(smoke, {
+			Texture = Util.TEX.smoke,
+			Color = Util.cs(rgb(220, 220, 220), rgb(170, 170, 170)),
+			Size = Util.ns(0, 1.5, 1, 7),
+			Transparency = Util.ns(0, 0.4, 1, 1),
+			Lifetime = NumberRange.new(5, 8),
+			Rate = 3,
+			Speed = NumberRange.new(2, 4),
+			SpreadAngle = Vector2.new(8, 8),
+			Acceleration = Vector3.new(1, 0.4, 0),
+			EmissionDirection = Enum.NormalId.Top,
+			LightInfluence = 1,
+		})
+		Util.pointLight(AssetLibrary.anchor(mesh, cf, Vector3.new(-3.4, -9.9, 10.8), "PorchLight"), rgb(255, 190, 120), 1.2, 18)
+		Util.pointLight(AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 7), "Hearth"), rgb(255, 190, 120), 1, 16)
+		cottageGarden(mesh, rng, cf, 24, 18)
+		return mesh
+	end
+	local m = Util.model(parent, "Cottage")
 	local W, D, H = 24, 18, 12
 	local plaster = Util.vary(rng, rgb(240, 228, 204), 0.03)
 	local roofColor = Util.pick(rng, ROOFS)
@@ -3762,34 +4543,7 @@ local function cottage(parent, rng, pos, facing)
 	local lantern = box(m, cf * CFrame.new(-3.6, 2.5 + 9.5, -D / 2 - 0.9), Vector3.new(1.2, 1.6, 1.2), rgb(255, 210, 140), M.Neon, NOCOL_NOSHADOW)
 	Util.pointLight(lantern, rgb(255, 190, 120), 1.2, 18)
 
-	-- picket fence around a front garden
-	local fence = rgb(226, 216, 196)
-	local gardenFront = -D / 2 - 14
-	for x = -W / 2 - 4, W / 2 + 4, 3 do
-		if math.abs(x) > 3 then
-			local p = (cf * CFrame.new(x, 0, gardenFront)).Position
-			local g = Landscape.heightAt(p.X, p.Z)
-			box(m, CFrame.new(Vector3.new(p.X, g + 1.6, p.Z)) * cf.Rotation, Vector3.new(0.5, 4, 0.5), fence, M.Wood, NOSHADOW)
-		end
-	end
-	for _, s in ipairs({ -1, 1 }) do
-		local a = (cf * CFrame.new(s * 3, 0, gardenFront)).Position
-		local b = (cf * CFrame.new(s * (W / 2 + 4), 0, gardenFront)).Position
-		local ga, gb = Landscape.heightAt(a.X, a.Z), Landscape.heightAt(b.X, b.Z)
-		beam(m, Vector3.new(a.X, ga + 2.6, a.Z), Vector3.new(b.X, gb + 2.6, b.Z), 0.3, 0.6, fence, M.Wood, NOSHADOW)
-	end
-	-- vegetable rows and a woodpile
-	for row = 0, 2 do
-		local c = cf * CFrame.new(-W / 4, 0.3, -D / 2 - 5 - row * 3)
-		box(m, c, Vector3.new(8, 1, 1.6), rgb(92, 64, 44), M.Ground, NOSHADOW)
-		for k = -1, 1 do
-			ball(m, (c * CFrame.new(k * 2.5, 0.9, 0)).Position, 1.4, rgb(90, 160, 60), M.LeafyGrass, NOCOL_NOSHADOW)
-		end
-	end
-	for k = 0, 5 do
-		local c = cf * CFrame.new(W / 2 + 2 + (k % 3) * 1.5 + (k // 3) * 0.75, 1 + (k // 3) * 1.3, 0) * CFrame.Angles(0, HALF_PI, 0)
-		Util.cylinder(m, c, 6, 1.4, rgb(130, 96, 64), M.Wood, NOSHADOW)
-	end
+	cottageGarden(m, rng, cf, W, D)
 	return m
 end
 
@@ -3959,7 +4713,7 @@ function Forest.Build(folder, rng)
 		{ L.ForestSpawn, 90 },
 		{ L.WorldTree, 175 },
 		{ L.ForestLake, 380 },
-		{ Landscape.WaterfallHill, 120 },
+		{ Landscape.Waterfall and Landscape.Waterfall.center or L.ForestLake, 170 },
 	}
 	for _, c in ipairs(Layout.forestCottages()) do
 		table.insert(avoid, { c, 60 })
@@ -4040,7 +4794,7 @@ return Forest
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000D">
+			<Item class="ModuleScript" referent="RBX0000000F">
 				<Properties>
 					<string name="Name">Hollow</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -4057,6 +4811,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Hollow = {}
 
@@ -4088,21 +4843,29 @@ local function buildBastion(parent, rng)
 	local R, sink = 450, 120
 	local toCenter = Vector3.new(-G.X, 0, -G.Z).Unit
 
-	ball(m, G - Vector3.new(0, sink, 0), R * 2, WHITE, M.Concrete)
-	for _, y in ipairs({ 40, 130, 220, 290 }) do
-		local yy = y + sink
-		local d = 2 * math.sqrt(R * R - yy * yy) + 3
-		disc(m, G + Vector3.new(0, y, 0), 5, d, PALE, M.Concrete, NOSHADOW)
-	end
+	-- the dome, its crown spire and the great gate (one mesh, gate facing the island centre)
+	local dome = AssetLibrary.place("Bastion", m, flatCF(G, toCenter))
+	if dome then
+		dome.Name = "Dome"
+		local beacon = AssetLibrary.anchor(dome, flatCF(G, toCenter), Vector3.new(0, 0, 668), "Beacon")
+		Util.pointLight(beacon, SPIRIT, 3, 60)
+	else
+		ball(m, G - Vector3.new(0, sink, 0), R * 2, WHITE, M.Concrete)
+		for _, y in ipairs({ 40, 130, 220, 290 }) do
+			local yy = y + sink
+			local d = 2 * math.sqrt(R * R - yy * yy) + 3
+			disc(m, G + Vector3.new(0, y, 0), 5, d, PALE, M.Concrete, NOSHADOW)
+		end
 
-	-- crown spire on top of the dome
-	local top = G + Vector3.new(0, R - sink, 0)
-	column(m, top - Vector3.new(0, 20, 0), 140, 46, WHITE, M.Concrete)
-	disc(m, top + Vector3.new(0, 120, 0), 6, 64, PALE, M.Concrete)
-	column(m, top + Vector3.new(0, 123, 0), 90, 22, WHITE, M.Concrete)
-	rod(m, top + Vector3.new(0, 210, 0), top + Vector3.new(0, 330, 0), 6, WHITE, M.Concrete)
-	local beacon = ball(m, top + Vector3.new(0, 332, 0), 8, SPIRIT, M.Neon, NOSHADOW)
-	Util.pointLight(beacon, SPIRIT, 3, 60)
+		-- crown spire on top of the dome
+		local top = G + Vector3.new(0, R - sink, 0)
+		column(m, top - Vector3.new(0, 20, 0), 140, 46, WHITE, M.Concrete)
+		disc(m, top + Vector3.new(0, 120, 0), 6, 64, PALE, M.Concrete)
+		column(m, top + Vector3.new(0, 123, 0), 90, 22, WHITE, M.Concrete)
+		rod(m, top + Vector3.new(0, 210, 0), top + Vector3.new(0, 330, 0), 6, WHITE, M.Concrete)
+		local beacon = ball(m, top + Vector3.new(0, 332, 0), 8, SPIRIT, M.Neon, NOSHADOW)
+		Util.pointLight(beacon, SPIRIT, 3, 60)
+	end
 
 	-- needle towers around the dome
 	for k = 0, 6 do
@@ -4110,6 +4873,15 @@ local function buildBastion(parent, rng)
 		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
 		local base = ground(G + dir * (R + rng:NextNumber(70, 140)))
 		local h = rng:NextNumber(220, 420)
+		-- the mesh is 320 studs to its top disc, with the glowing tip at 413
+		local needle = AssetLibrary.place("NeedleTower", m, flatCF(base, -dir), h / 320)
+		if needle then
+			if k % 2 == 0 then
+				local tip = AssetLibrary.anchor(needle, flatCF(base, -dir), Vector3.new(0, 0, 413), "Tip")
+				Util.pointLight(tip, SPIRIT, 2, 40)
+			end
+			continue
+		end
 		box(m, CFrame.new(base + Vector3.new(0, 8, 0)), Vector3.new(44, 24, 44), PALE, M.Concrete)
 		column(m, base, h, 26, WHITE, M.Concrete)
 		disc(m, base + Vector3.new(0, h * 0.55, 0), 4, 36, PALE, M.Concrete, NOSHADOW)
@@ -4124,13 +4896,15 @@ local function buildBastion(parent, rng)
 
 	-- the great gate, facing the island center
 	local gatePos = G + toCenter * (math.sqrt(R * R - sink * sink) - 18)
-	local gcf = flatCF(gatePos, toCenter)
-	box(m, gcf * CFrame.new(0, 45, 0), Vector3.new(64, 92, 60), rgb(10, 10, 14), M.SmoothPlastic)
-	for _, s in ipairs({ -1, 1 }) do
-		box(m, gcf * CFrame.new(s * 40, 55, -26), Vector3.new(16, 112, 18), WHITE, M.Concrete)
+	if not dome then
+		local gcf = flatCF(gatePos, toCenter)
+		box(m, gcf * CFrame.new(0, 45, 0), Vector3.new(64, 92, 60), rgb(10, 10, 14), M.SmoothPlastic)
+		for _, s in ipairs({ -1, 1 }) do
+			box(m, gcf * CFrame.new(s * 40, 55, -26), Vector3.new(16, 112, 18), WHITE, M.Concrete)
+		end
+		box(m, gcf * CFrame.new(0, 116, -26), Vector3.new(98, 16, 20), WHITE, M.Concrete)
+		box(m, gcf * CFrame.new(0, 100, -31), Vector3.new(64, 3, 4), SPIRIT, M.Neon, NOCOL_NOSHADOW)
 	end
-	box(m, gcf * CFrame.new(0, 116, -26), Vector3.new(98, 16, 20), WHITE, M.Concrete)
-	box(m, gcf * CFrame.new(0, 100, -31), Vector3.new(64, 3, 4), SPIRIT, M.Neon, NOCOL_NOSHADOW)
 
 	-- processional road of white slabs and pillars leading to the gate
 	for k = 0, 34 do
@@ -4311,7 +5085,7 @@ return Hollow
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000E">
+			<Item class="ModuleScript" referent="RBX00000010">
 				<Properties>
 					<string name="Name">Hub</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -4326,6 +5100,8 @@ local Landscape = require(script.Parent.Parent.Landscape)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
+local Waterworks = require(script.Parent.Parent.Waterworks)
 
 local Hub = {}
 
@@ -4416,9 +5192,20 @@ end
 
 -- Palace ------------------------------------------------------------------------------------
 local function buildPalace(parent)
-	local m = Util.model(parent, "SunThronePalace")
 	local front = Layout.zoneDirection("Forest")
 	local P = flatCF(Vector3.new(0, TIER2_TOP, 0), front) -- local -Z faces the Forest avenue
+	local mesh = AssetLibrary.place("Palace", parent, P)
+	if mesh then
+		mesh.Name = "SunThronePalace"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		for _, x in ipairs({ -14, 14 }) do
+			Props.torch(mesh, (P * CFrame.new(x, 0, -52)).Position, 8)
+		end
+		local crown = AssetLibrary.anchor(mesh, P, Vector3.new(0, 6, 136), "CrownLight")
+		Util.pointLight(crown, rgb(255, 210, 130), 2, 40)
+		return mesh
+	end
+	local m = Util.model(parent, "SunThronePalace")
 
 	local function at(x, y, z)
 		return P * CFrame.new(x, y, z)
@@ -4534,11 +5321,19 @@ end
 
 -- Sun-clock spire ------------------------------------------------------------------------------
 local function buildClockSpire(parent)
-	local m = Util.model(parent, "SunClockSpire")
 	local a = Layout.ZoneAngle.Forest + TAU / 10
 	local base = Vector3.new(math.cos(a) * 186, TIER1_TOP, math.sin(a) * 186)
 	local face = Vector3.new(-math.cos(a), 0, -math.sin(a))
 	local cf = flatCF(base, -face)
+	local mesh = AssetLibrary.place("ClockSpire", parent, cf)
+	if mesh then
+		mesh.Name = "SunClockSpire"
+		mesh.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+		local bell = AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, 165), "BellLight")
+		Util.pointLight(bell, rgb(255, 200, 120), 1.5, 34)
+		return mesh, base
+	end
+	local m = Util.model(parent, "SunClockSpire")
 
 	box(m, cf * CFrame.new(0, 3, 0), Vector3.new(32, 6, 32), STONE_DARK, M.Sandstone)
 	box(m, cf * CFrame.new(0, 66, 0), Vector3.new(24, 120, 24), STONE, M.Limestone)
@@ -4694,28 +5489,75 @@ local function house(parent, rng, cf, w, d)
 end
 
 -- Plaza with fountain and market stalls ------------------------------------------------------------
-local function fountain(parent, pos)
-	local m = Util.model(parent, "Fountain")
-	disc(m, pos + Vector3.new(0, 1.5, 0), 3.4, 30, STONE, M.Limestone)
-	disc(m, pos + Vector3.new(0, 3.3, 0), 0.6, 31, STONE_DARK, M.Sandstone, NOSHADOW)
-	disc(m, pos + Vector3.new(0, 3.1, 0), 0.6, 27, rgb(70, 170, 200), M.Glass, { transparency = 0.25, reflectance = 0.3, shadow = false })
-	column(m, pos, 9, 4, STONE, M.Limestone)
-	disc(m, pos + Vector3.new(0, 9, 0), 1.4, 12, STONE_DARK, M.Sandstone)
-	disc(m, pos + Vector3.new(0, 9.6, 0), 0.4, 10.4, rgb(70, 170, 200), M.Glass, { transparency = 0.25, reflectance = 0.3, shadow = false })
-	local spout = ball(m, pos + Vector3.new(0, 12, 0), 2.4, GOLD, M.Foil)
-	Util.particles(spout, {
+local function waterJet(parent, pos, dir, rate, speed)
+	local p = box(parent, CFrame.lookAt(pos, pos + dir), Vector3.new(0.6, 0.6, 0.6), GOLD, M.SmoothPlastic, { collide = false, shadow = false, transparency = 1 })
+	p.Name = "WaterJet"
+	p.CanQuery = false
+	Util.particles(p, {
 		Texture = Util.TEX.sparkle,
-		Color = Util.cs(rgb(200, 236, 255), rgb(120, 200, 240)),
-		Size = Util.ns(0, 0.5, 1, 0.2),
+		Color = Util.cs(rgb(210, 240, 255), rgb(130, 205, 240)),
+		Size = Util.ns(0, 0.45, 1, 0.2),
 		Transparency = Util.ns(0, 0.1, 1, 0.8),
-		Lifetime = NumberRange.new(1.2, 1.6),
-		Rate = 70,
-		Speed = NumberRange.new(10, 13),
-		SpreadAngle = Vector2.new(14, 14),
-		Acceleration = Vector3.new(0, -26, 0),
-		EmissionDirection = Enum.NormalId.Top,
+		Lifetime = NumberRange.new(0.7, 1.4),
+		Rate = rate,
+		Speed = NumberRange.new(speed * 0.85, speed),
+		SpreadAngle = Vector2.new(8, 8),
+		Acceleration = Vector3.new(0, -30, 0),
+		EmissionDirection = Enum.NormalId.Front,
 	})
+	return p
+end
+
+-- Fountain around one of Waterworks' grid-aligned basins (the water itself is terrain water).
+local function fountain(parent, center)
+	local base = Vector3.new(center.X, Waterworks.BASIN_TOP - 2, center.Z) -- water line sits 2 above the base
+	local m = AssetLibrary.place("Fountain", parent, CFrame.new(base))
+	local spout = base + Vector3.new(0, 13.6, 0)
+	if not m then
+		m = Util.model(parent, "Fountain")
+		local h, b = Waterworks.BASIN_HALF, Waterworks.BOWL_HALF
+		for _, s in ipairs({ -1, 1 }) do
+			box(m, CFrame.new(base + Vector3.new(0, 1.3, s * (h + 1.3))), Vector3.new(2 * h + 5.2, 4.6, 2.6), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(s * (h + 1.3), 1.3, 0)), Vector3.new(2.6, 4.6, 2 * h), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(0, 8.05, s * (b + 0.7))), Vector3.new(2 * b + 2.8, 5.1, 1.4), STONE, M.Limestone)
+			box(m, CFrame.new(base + Vector3.new(s * (b + 0.7), 8.05, 0)), Vector3.new(1.4, 5.1, 2 * b), STONE, M.Limestone)
+		end
+		box(m, CFrame.new(base + Vector3.new(0, -6.2, 0)), Vector3.new(2 * h, 0.4, 2 * h), TEAL, M.CeramicTiles, NOSHADOW)
+		column(m, base + Vector3.new(0, -6.4, 0), 12, 4, STONE, M.Limestone)
+		box(m, CFrame.new(base + Vector3.new(0, 5.7, 0)), Vector3.new(2 * b + 2.8, 0.6, 2 * b + 2.8), STONE_DARK, M.Sandstone)
+		ball(m, base + Vector3.new(0, 12, 0), 2.4, GOLD, M.Foil)
+		spout = base + Vector3.new(0, 12.4, 0)
+	end
+	m.Name = "Fountain"
+	waterJet(m, spout, Vector3.new(0, 1, 0), 70, 13)
+	for _, d in ipairs({ Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, 1), Vector3.new(0, 0, -1) }) do
+		waterJet(m, base + d * 5.8 + Vector3.new(0, 8.6, 0), (d + Vector3.new(0, 0.3, 0)).Unit, 18, 6)
+	end
 	return m
+end
+
+-- Reflecting pools beside the palace approach (terrain water inside marble rims).
+local function buildPools(parent)
+	for _, pool in ipairs(Waterworks.palacePools()) do
+		local m = Util.model(parent, "ReflectingPool")
+		local mn, mx = pool.min, pool.max
+		local cx, cz = (mn.X + mx.X) / 2, (mn.Z + mx.Z) / 2
+		local sx, sz = mx.X - mn.X, mx.Z - mn.Z
+		local h = mx.Y + 1 - pool.floorY
+		local y = pool.floorY + h / 2
+		box(m, CFrame.new(cx, pool.floorY + 0.05, cz), Vector3.new(sx, 0.1, sz), TEAL, M.CeramicTiles, NOSHADOW)
+		box(m, CFrame.new(cx, y, mn.Z - 1), Vector3.new(sx + 4, h, 2), MARBLE, M.Marble)
+		box(m, CFrame.new(cx, y, mx.Z + 1), Vector3.new(sx + 4, h, 2), MARBLE, M.Marble)
+		box(m, CFrame.new(mn.X - 1, y, cz), Vector3.new(2, h, sz), MARBLE, M.Marble)
+		box(m, CFrame.new(mx.X + 1, y, cz), Vector3.new(2, h, sz), MARBLE, M.Marble)
+		local long = sx > sz and Vector3.new(1, 0, 0) or Vector3.new(0, 0, 1)
+		local len = math.max(sx, sz)
+		for k = 1, 3 do
+			local p = Vector3.new(cx, mx.Y - 0.3, cz) + long * (len * (k / 4 - 0.5))
+			ball(m, p, 1.4, GOLD, M.Foil)
+			waterJet(m, p + Vector3.new(0, 0.6, 0), Vector3.new(0, 1, 0), 30, 9)
+		end
+	end
 end
 
 local function stall(parent, rng, cf)
@@ -4741,6 +5583,26 @@ local function stall(parent, rng, cf)
 end
 
 -- Walls and gates --------------------------------------------------------------------------------------
+-- Dark slate plaque showing text on its front (-Z) face.
+local function namePlaque(parent, cf, text)
+	local plaque = box(parent, cf, Vector3.new(30, 6.4, 0.4), rgb(48, 40, 34), M.Slate, NOSHADOW)
+	plaque.Name = "NamePlaque"
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.CanvasSize = Vector2.new(720, 150)
+	gui.LightInfluence = 0.2
+	gui.Parent = plaque
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextColor3 = rgb(240, 206, 120)
+	label.Font = Enum.Font.Garamond
+	label.TextScaled = true
+	label.Parent = gui
+	return plaque
+end
+
 local function buildWalls(parent)
 	local m = Util.model(parent, "CityWalls")
 	local segments = 84
@@ -4769,7 +5631,10 @@ local function buildWalls(parent)
 			for k = -1, 1, 2 do
 				box(m, cf * CFrame.new(5.5, wallH / 2 + 5, k * len / 4), Vector3.new(2.4, 5, len / 4), STONE, M.Sandstone, NOSHADOW)
 			end
-			if s % 7 == 3 and not inGate(a, 0.08) then
+			local towerBase = dir * (WALL_R + 3) + Vector3.new(0, TOP, 0)
+			if s % 7 == 3 and not inGate(a, 0.08) and AssetLibrary.place("WallTower", m, CFrame.lookAt(towerBase, towerBase + dir)) then
+				-- detailed tower mesh placed
+			elseif s % 7 == 3 and not inGate(a, 0.08) then
 				local base = dir * (WALL_R + 3) + Vector3.new(0, TOP - 4, 0)
 				column(m, base, wallH + 18, 26, STONE, M.Sandstone)
 				disc(m, base + Vector3.new(0, wallH + 18, 0), 2, 30, STONE_DARK, M.Sandstone)
@@ -4783,8 +5648,23 @@ local function buildWalls(parent)
 
 	-- the five gates
 	for _, av in ipairs(AVENUES) do
-		local gm = Util.model(m, "Gate_" .. av.id)
 		local color = GATE_COLORS[av.id]
+		local ground = av.dir * WALL_R + Vector3.new(0, TOP, 0)
+		local gateCF = CFrame.lookAt(ground, ground + av.dir) -- front faces out of the city
+		local mesh = AssetLibrary.place("CityGate", m, gateCF, 1, { Fabric = color })
+		if mesh then
+			mesh.Name = "Gate_" .. av.id
+			local name = string.upper(Layout.ZoneInfo[av.id].name)
+			namePlaque(mesh, gateCF * CFrame.new(AssetLibrary.fromBlender(0, -9.75, 45.2)), name)
+			namePlaque(mesh, gateCF * CFrame.new(AssetLibrary.fromBlender(0, 9.25, 45.2)) * CFrame.Angles(0, math.pi, 0), name)
+			for _, x in ipairs({ -38, 38 }) do
+				local fx = AssetLibrary.anchor(mesh, gateCF, Vector3.new(x, -19.5, 13.6), "Brazier")
+				Util.fire(fx, 4, 8)
+				Util.pointLight(fx, rgb(255, 160, 80), 2, 36)
+			end
+			continue
+		end
+		local gm = Util.model(m, "Gate_" .. av.id)
 		local dir = av.dir
 		local side = Vector3.new(-dir.Z, 0, dir.X)
 		local center = dir * WALL_R + Vector3.new(0, TOP - 4, 0)
@@ -4814,25 +5694,10 @@ local function buildWalls(parent)
 		box(gm, lintelCF, Vector3.new(14, 8, span + 18), STONE, M.Sandstone)
 		box(gm, lintelCF * CFrame.new(0, 4.6, 0), Vector3.new(15, 1.2, span + 20), GOLD, M.Foil, NOSHADOW)
 
-		-- plaque with the destination name, facing out of the city
-		local plaque = box(gm, CFrame.lookAt(archBase + dir * 7.2 + Vector3.new(0, 18, 0), archBase + dir * 20 + Vector3.new(0, 18, 0)), Vector3.new(36, 6, 0.6), rgb(48, 40, 34), M.Slate, NOSHADOW)
-		local gui = Instance.new("SurfaceGui")
-		gui.Face = Enum.NormalId.Front
-		gui.CanvasSize = Vector2.new(720, 120)
-		gui.LightInfluence = 0.2
-		gui.Parent = plaque
-		local label = Instance.new("TextLabel")
-		label.Size = UDim2.fromScale(1, 1)
-		label.BackgroundTransparency = 1
-		label.Text = string.upper(Layout.ZoneInfo[av.id].name)
-		label.TextColor3 = rgb(240, 206, 120)
-		label.Font = Enum.Font.Garamond
-		label.TextScaled = true
-		label.Parent = gui
-		-- the same name on the inside, facing the palace
-		local inner = plaque:Clone()
-		inner.CFrame = CFrame.lookAt(archBase - dir * 7.2 + Vector3.new(0, 18, 0), archBase - dir * 20 + Vector3.new(0, 18, 0))
-		inner.Parent = gm
+		-- plaque with the destination name, facing out of the city, and again facing the palace
+		local name = string.upper(Layout.ZoneInfo[av.id].name)
+		namePlaque(gm, CFrame.lookAt(archBase + dir * 7.2 + Vector3.new(0, 18, 0), archBase + dir * 20 + Vector3.new(0, 18, 0)), name)
+		namePlaque(gm, CFrame.lookAt(archBase - dir * 7.2 + Vector3.new(0, 18, 0), archBase - dir * 20 + Vector3.new(0, 18, 0)), name)
 
 		-- hanging banners in the region's colour
 		for _, s in ipairs({ -1, 1 }) do
@@ -4908,6 +5773,7 @@ end
 function Hub.Build(folder, rng)
 	Util.log("Building Solkhar (capital)...")
 	buildTiers(folder)
+	buildPools(folder)
 	buildPalace(folder)
 	local _, clockBase = buildClockSpire(folder)
 	buildWalls(folder)
@@ -4918,16 +5784,18 @@ function Hub.Build(folder, rng)
 	-- fountain plazas on each avenue
 	local plazas = {}
 	local market = Util.model(folder, "Markets")
-	for _, av in ipairs(AVENUES) do
-		local center = av.dir * 412
+	local fountainCenters = Waterworks.fountainCenters()
+	for i, av in ipairs(AVENUES) do
+		local c = fountainCenters[i]
+		local center = Vector3.new(c.X, 0, c.Z)
 		table.insert(plazas, center)
-		fountain(market, center + Vector3.new(0, TOP, 0))
+		fountain(market, c)
 		local side = Vector3.new(-av.dir.Z, 0, av.dir.X)
-		for k, off in ipairs({ { 30, -24 }, { 30, 24 }, { -30, -24 }, { -30, 24 } }) do
+		for _, off in ipairs({ { 30, -24 }, { 30, 24 }, { -30, -24 }, { -30, 24 } }) do
 			local pos = center + side * off[1] + av.dir * off[2] + Vector3.new(0, TOP, 0)
-			local face = (center + Vector3.new(0, TOP, 0) - pos)
-			if k <= 4 then
-				stall(market, rng, flatCF(pos, face))
+			local cf = flatCF(pos, center + Vector3.new(0, TOP, 0) - pos)
+			if not AssetLibrary.place("MarketStall", market, cf, 1, { Fabric = Util.pick(rng, CLOTH), Fabric2 = Util.pick(rng, CLOTH) }) then
+				stall(market, rng, cf)
 			end
 		end
 		for k = 0, 5 do
@@ -4960,11 +5828,18 @@ function Hub.Build(folder, rng)
 	-- houses in rings between the avenues
 	local houses = Util.model(folder, "Houses")
 	local count = 0
+	local houseKinds = AssetLibrary.has("House_A") and AssetLibrary.has("House_B") and AssetLibrary.has("House_C") and {
+		{ name = "House_A", w = 28 },
+		{ name = "House_B", w = 29 },
+		{ name = "House_C", w = 21 },
+	} or nil
 	for ringR = 322, WALL_R - 68, 42 do
 		local a = rng:NextNumber(0, 0.2)
 		while a < TAU do
-			local w = rng:NextNumber(20, 32)
-			local d = rng:NextNumber(20, 30)
+			local kind = houseKinds and Util.pick(rng, houseKinds)
+			local scale = kind and rng:NextNumber(0.88, 1.12) or 1
+			local w = kind and kind.w * scale or rng:NextNumber(20, 32)
+			local d = kind and 24 or rng:NextNumber(20, 30)
 			local center = Vector3.new(math.cos(a) * ringR, 0, math.sin(a) * ringR)
 			local blocked = nearAvenue(center, 26 + w / 2)
 				or (clockBase and (center - Vector3.new(clockBase.X, 0, clockBase.Z)).Magnitude < 40)
@@ -4979,7 +5854,14 @@ function Hub.Build(folder, rng)
 				else
 					local jitter = Vector3.new(rng:NextNumber(-3, 3), 0, rng:NextNumber(-3, 3))
 					local pos = center + jitter + Vector3.new(0, TOP, 0)
-					house(houses, rng, flatCF(pos, -center), w, d)
+					if kind then
+						AssetLibrary.place(kind.name, houses, flatCF(pos, -center), scale, {
+							Plaster = Util.pick(rng, HOUSE_COLORS),
+							Fabric = Util.pick(rng, CLOTH),
+						})
+					else
+						house(houses, rng, flatCF(pos, -center), w, d)
+					end
 					count += 1
 				end
 			end
@@ -5007,7 +5889,7 @@ return Hub
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX0000000F">
+			<Item class="ModuleScript" referent="RBX00000011">
 				<Properties>
 					<string name="Name">Ruins</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -5021,6 +5903,7 @@ local Layout = require(script.Parent.Parent.IslandLayout)
 local Landscape = require(script.Parent.Parent.Landscape)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Ruins = {}
 
@@ -5119,6 +6002,50 @@ local function skyscraper(parent, rng, cf, w, d, H)
 	return m
 end
 
+-- Detailed tower meshes: their full height, the scale range they look right at,
+-- and a spot on the broken top where a fire can burn (Blender coordinates).
+local TOWER_MESHES = {
+	{ name = "Skyscraper_A", height = 300, min = 0.6, max = 1.4, fire = Vector3.new(15, 15, 217) },
+	{ name = "Skyscraper_B", height = 200, min = 0.6, max = 1.5, fire = Vector3.new(14, 0, 181) },
+}
+
+local function burning(part)
+	Util.pointLight(part, rgb(255, 110, 40), 2, 40)
+	Util.fire(part, 10, 12)
+	Util.particles(part, {
+		Texture = Util.TEX.smoke,
+		Color = Util.cs(rgb(40, 38, 38), rgb(90, 88, 88)),
+		Size = Util.ns(0, 6, 1, 26),
+		Transparency = Util.ns(0, 0.3, 1, 1),
+		Lifetime = NumberRange.new(8, 12),
+		Rate = 3,
+		Speed = NumberRange.new(6, 9),
+		SpreadAngle = Vector2.new(10, 10),
+		EmissionDirection = Enum.NormalId.Top,
+		LightInfluence = 1,
+	})
+end
+
+-- A skyscraper mesh with its base at cf, or nil without the asset library.
+-- stump = the short gutted frame instead of a tall tower.
+local function towerMesh(parent, rng, cf, H, stump)
+	if stump then
+		return AssetLibrary.place("Skyscraper_C", parent, cf, rng:NextNumber(0.8, 1.2))
+	end
+	local first = rng:NextInteger(1, #TOWER_MESHES)
+	for k = 0, #TOWER_MESHES - 1 do
+		local t = TOWER_MESHES[(first + k - 1) % #TOWER_MESHES + 1]
+		local m = AssetLibrary.place(t.name, parent, cf, math.clamp(H / t.height, t.min, t.max))
+		if m then
+			if cf.UpVector.Y > 0.9 and rng:NextNumber() < 0.35 then
+				burning(AssetLibrary.anchor(m, cf, t.fire, "Fire"))
+			end
+			return m
+		end
+	end
+	return nil
+end
+
 -- Concrete chunks scattered around a point.
 local function debris(parent, rng, center, radius, count)
 	local m = Util.model(parent, "Debris")
@@ -5207,18 +6134,23 @@ function Ruins.Build(folder, rng)
 				-- taller towers closer to the old downtown
 				local downtown = 1 - math.clamp((p - center).Magnitude / 1900, 0, 1)
 				local H = rng:NextNumber(110, 200) + downtown * rng:NextNumber(80, 240)
+				local function tower(cf, h, stump)
+					if not towerMesh(towers, rng, cf, h, stump) then
+						skyscraper(towers, rng, cf, w, d, h)
+					end
+				end
 				if roll < 0.12 then
 					-- toppled tower lying in the sand
 					local cf = CFrame.new(p + Vector3.new(0, math.min(w, d) * 0.25, 0)) * yaw * CFrame.Angles(HALF_PI * 0.94, 0, 0) * CFrame.new(0, -H * 0.15, 0)
-					skyscraper(towers, rng, cf, w, d, H * 0.7)
+					tower(cf, H * 0.7)
 				elseif roll < 0.3 then
 					-- stump
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, 6, 0)) * yaw, w, d, rng:NextNumber(26, 70))
+					tower(CFrame.new(p - Vector3.new(0, 6, 0)) * yaw, rng:NextNumber(26, 70), true)
 				elseif roll < 0.6 then
 					local tilt = CFrame.Angles(rng:NextNumber(-0.22, 0.22), 0, rng:NextNumber(-0.22, 0.22))
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, rng:NextNumber(12, 30), 0)) * yaw * tilt, w, d, H)
+					tower(CFrame.new(p - Vector3.new(0, rng:NextNumber(12, 30), 0)) * yaw * tilt, H)
 				else
-					skyscraper(towers, rng, CFrame.new(p - Vector3.new(0, rng:NextNumber(8, 24), 0)) * yaw, w, d, H)
+					tower(CFrame.new(p - Vector3.new(0, rng:NextNumber(8, 24), 0)) * yaw, H)
 				end
 				-- rubble mound and chunks at the base
 				for _ = 1, 3 do
@@ -5291,7 +6223,7 @@ return Ruins
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX00000010">
+			<Item class="ModuleScript" referent="RBX00000012">
 				<Properties>
 					<string name="Name">Sky</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -5416,7 +6348,7 @@ return Sky
 ]]></ProtectedString>
 				</Properties>
 			</Item>
-			<Item class="ModuleScript" referent="RBX00000011">
+			<Item class="ModuleScript" referent="RBX00000013">
 				<Properties>
 					<string name="Name">Snow</string>
 					<ProtectedString name="Source"><![CDATA[--[[
@@ -5433,6 +6365,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Snow = {}
 
@@ -5502,6 +6435,11 @@ end
 
 -- Torii gate standing at cf (ground center); people walk through along cf's Z axis.
 local function torii(parent, cf, width, height, color)
+	-- the mesh's pillars stand 16 apart
+	local mesh = AssetLibrary.place("Torii", parent, cf, width / 16, color and { Vermilion = color })
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "Torii")
 	color = color or VERMILION
 	for _, s in ipairs({ -1, 1 }) do
@@ -5517,8 +6455,35 @@ local function torii(parent, cf, width, height, color)
 	return m
 end
 
+local function chimneySmoke(part)
+	Util.particles(part, {
+		Texture = Util.TEX.smoke,
+		Color = Util.cs(rgb(230, 230, 232), rgb(190, 190, 196)),
+		Size = Util.ns(0, 1, 1, 6),
+		Transparency = Util.ns(0, 0.5, 1, 1),
+		Lifetime = NumberRange.new(5, 8),
+		Rate = 2,
+		Speed = NumberRange.new(2, 3),
+		SpreadAngle = Vector2.new(8, 8),
+		EmissionDirection = Enum.NormalId.Top,
+		LightInfluence = 1,
+	})
+end
+
 -- Minka (farmhouse) at cf ground center, front facing -Z.
 local function minka(parent, rng, cf, W, D, thatched)
+	-- the meshes are 22 x 16; scale by the requested width
+	local mesh = AssetLibrary.place(thatched and "Minka_Thatch" or "Minka_Tile", parent, cf, W / 22)
+	if mesh then
+		mesh.Name = "Minka"
+		chimneySmoke(AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, thatched and 26.5 or 22.5), "Smoke"))
+		local lamp = AssetLibrary.anchor(mesh, cf, Vector3.new(9.5, -11.6, 10.3), "Lantern")
+		Util.pointLight(lamp, rgb(255, 130, 80), 1.2, 18)
+		-- warm light glowing out through the paper screens
+		local screen = AssetLibrary.anchor(mesh, cf, Vector3.new(0, -8.4, 7.2), "ScreenGlow")
+		Util.surfaceLight(screen, Enum.NormalId.Front, rgb(255, 206, 140), 1.4, 16, 100)
+		return mesh
+	end
 	local m = Util.model(parent, "Minka")
 	box(m, cf * CFrame.new(0, 0.2, 0), Vector3.new(W + 3, 2.4, D + 3), GRANITE, M.Granite)
 	box(m, cf * CFrame.new(0, 2, 0), Vector3.new(W, 1.2, D), WOOD_LIGHT, M.WoodPlanks)
@@ -5556,18 +6521,7 @@ local function minka(parent, rng, cf, W, D, thatched)
 	snowyGable(m, roofCF, D + 9, W + 7, rise, thatched and THATCH or TILE, thatched and M.Grass or M.ClayRoofTiles)
 	box(m, cf * CFrame.new(0, 12.8 + rise + 1, 0), Vector3.new(W + 8, 1.6, 2), WOOD, M.Wood, NOSHADOW)
 	local ridge = box(m, cf * CFrame.new(0, 12.8 + rise + 2.1, 0), Vector3.new(W + 8, 0.8, 2.6), SNOW, M.Snow, NOSHADOW)
-	Util.particles(ridge, {
-		Texture = Util.TEX.smoke,
-		Color = Util.cs(rgb(230, 230, 232), rgb(190, 190, 196)),
-		Size = Util.ns(0, 1, 1, 6),
-		Transparency = Util.ns(0, 0.5, 1, 1),
-		Lifetime = NumberRange.new(5, 8),
-		Rate = 2,
-		Speed = NumberRange.new(2, 3),
-		SpreadAngle = Vector2.new(8, 8),
-		EmissionDirection = Enum.NormalId.Top,
-		LightInfluence = 1,
-	})
+	chimneySmoke(ridge)
 	redLantern(m, (cf * CFrame.new(W / 2 - 1.5, 10, -D / 2 - 3.5)).Position)
 
 	-- firewood and a barrel by the side
@@ -5691,7 +6645,12 @@ local function jizo(parent, pos, facing)
 end
 
 -- Temple --------------------------------------------------------------------------------------------
-local function pagoda(parent, base)
+local function pagoda(parent, base, facing)
+	local mesh = AssetLibrary.place("Pagoda", parent, flatCF(base, facing))
+	if mesh then
+		mesh.Name = "FiveStoreyPagoda"
+		return mesh
+	end
 	local m = Util.model(parent, "FiveStoreyPagoda")
 	box(m, CFrame.new(base + Vector3.new(0, 1.5, 0)), Vector3.new(28, 3, 28), GRANITE, M.Granite)
 	local y = 3
@@ -5715,6 +6674,10 @@ local function pagoda(parent, base)
 end
 
 local function bellTower(parent, cf)
+	local mesh = AssetLibrary.place("BellPavilion", parent, cf)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "BellPavilion")
 	box(m, cf * CFrame.new(0, 1.5, 0), Vector3.new(22, 3, 22), GRANITE, M.Granite)
 	for _, c in ipairs({ { -8, -8 }, { 8, -8 }, { -8, 8 }, { 8, 8 } }) do
@@ -5778,22 +6741,31 @@ local function buildTemple(parent, rng)
 
 	-- sanmon (two-storey gate)
 	local G = T * CFrame.new(0, 0, -100)
-	box(m, G * CFrame.new(0, 0.4, 0), Vector3.new(48, 2, 20), GRANITE, M.Granite)
-	for _, x in ipairs({ -18, -6, 6, 18 }) do
-		for _, z in ipairs({ -6, 6 }) do
-			column(m, (G * CFrame.new(x, 1, z)).Position, 20, 2.6, VERMILION, M.SmoothPlastic)
+	local gate = AssetLibrary.place("TempleGate", m, G)
+	if gate then
+		gate.Name = "Sanmon"
+		-- the name board's black panel sits at Blender (0, -6.75, 27); the text goes just in front of it
+		local plaque = box(gate, G * CFrame.new(AssetLibrary.fromBlender(0, -7.12, 27)), Vector3.new(10.2, 4.2, 0.1), rgb(30, 28, 28), M.SmoothPlastic, NOCOL_NOSHADOW)
+		plaque.Name = "NameBoard"
+		label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
+	else
+		box(m, G * CFrame.new(0, 0.4, 0), Vector3.new(48, 2, 20), GRANITE, M.Granite)
+		for _, x in ipairs({ -18, -6, 6, 18 }) do
+			for _, z in ipairs({ -6, 6 }) do
+				column(m, (G * CFrame.new(x, 1, z)).Position, 20, 2.6, VERMILION, M.SmoothPlastic)
+			end
 		end
+		box(m, G * CFrame.new(0, 20.6, 0), Vector3.new(40, 1.6, 14), VERMILION, M.SmoothPlastic)
+		snowyHip(m, G * CFrame.new(0, 21.4, 0), 54, 28, 7, TILE)
+		box(m, G * CFrame.new(0, 28, 0), Vector3.new(32, 9, 11), PLASTER, M.Plaster)
+		for _, x in ipairs({ -16, -5.3, 5.3, 16 }) do
+			box(m, G * CFrame.new(x, 28, -5.6), Vector3.new(1, 9, 0.6), VERMILION, M.SmoothPlastic, NOSHADOW)
+		end
+		box(m, G * CFrame.new(0, 32.4, 0), Vector3.new(34, 1.2, 13), VERMILION, M.SmoothPlastic, NOSHADOW)
+		snowyHip(m, G * CFrame.new(0, 33, 0), 46, 24, 9, TILE)
+		local plaque = box(m, G * CFrame.new(0, 26.4, -6.4), Vector3.new(10, 4, 0.6), rgb(40, 32, 28), M.Wood, NOSHADOW)
+		label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
 	end
-	box(m, G * CFrame.new(0, 20.6, 0), Vector3.new(40, 1.6, 14), VERMILION, M.SmoothPlastic)
-	snowyHip(m, G * CFrame.new(0, 21.4, 0), 54, 28, 7, TILE)
-	box(m, G * CFrame.new(0, 28, 0), Vector3.new(32, 9, 11), PLASTER, M.Plaster)
-	for _, x in ipairs({ -16, -5.3, 5.3, 16 }) do
-		box(m, G * CFrame.new(x, 28, -5.6), Vector3.new(1, 9, 0.6), VERMILION, M.SmoothPlastic, NOSHADOW)
-	end
-	box(m, G * CFrame.new(0, 32.4, 0), Vector3.new(34, 1.2, 13), VERMILION, M.SmoothPlastic, NOSHADOW)
-	snowyHip(m, G * CFrame.new(0, 33, 0), 46, 24, 9, TILE)
-	local plaque = box(m, G * CFrame.new(0, 26.4, -6.4), Vector3.new(10, 4, 0.6), rgb(40, 32, 28), M.Wood, NOSHADOW)
-	label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
 	for _, x in ipairs({ -12, 12 }) do
 		redLantern(m, (G * CFrame.new(x, 17, -8)).Position)
 	end
@@ -5807,44 +6779,53 @@ local function buildTemple(parent, rng)
 
 	-- main hall
 	local Hc = T * CFrame.new(0, 0, 36)
-	box(m, Hc * CFrame.new(0, 3, 0), Vector3.new(96, 6, 70), GRANITE, M.Granite)
-	for k = 1, 6 do
-		box(m, Hc * CFrame.new(0, 6 - k, -35 - k * 2 + 1), Vector3.new(30, 2, 2), GRANITE, M.Granite)
-	end
-	box(m, Hc * CFrame.new(0, 18, 4), Vector3.new(72, 24, 46), PLASTER, M.Plaster)
-	for x = -36, 36, 9 do
-		column(m, (Hc * CFrame.new(x, 6, -27)).Position, 24, 2.6, VERMILION, M.SmoothPlastic)
-		column(m, (Hc * CFrame.new(x, 6, 4 - 23)).Position, 24, 2, WOOD, M.Wood, NOSHADOW)
-	end
-	box(m, Hc * CFrame.new(0, 29.5, -27), Vector3.new(76, 2, 2.4), VERMILION, M.SmoothPlastic)
-	box(m, Hc * CFrame.new(0, 7.2, -24), Vector3.new(76, 0.6, 8), WOOD_LIGHT, M.WoodPlanks)
-	box(m, Hc * CFrame.new(0, 9, -27.6), Vector3.new(72, 0.5, 0.5), VERMILION, M.SmoothPlastic, NOSHADOW)
-	for _, x in ipairs({ -18, 0, 18 }) do
-		local door = box(m, Hc * CFrame.new(x, 15, -19.2), Vector3.new(12, 16, 0.6), rgb(96, 64, 42), M.Wood, NOSHADOW)
-		for _, y in ipairs({ 10, 14, 18, 22 }) do
-			box(m, Hc * CFrame.new(x, y, -19.6), Vector3.new(12, 0.3, 0.3), WOOD, M.Wood, NOCOL_NOSHADOW)
+	local hall = AssetLibrary.place("TempleHall", m, Hc)
+	if hall then
+		hall.Name = "MainHall"
+		local lantern = AssetLibrary.anchor(hall, Hc, Vector3.new(0, -29.5, 23.7), "GreatLantern")
+		Util.pointLight(lantern, rgb(255, 120, 70), 2, 34)
+		local door = AssetLibrary.anchor(hall, Hc, Vector3.new(0, -20.2, 15), "DoorGlow")
+		Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+	else
+		box(m, Hc * CFrame.new(0, 3, 0), Vector3.new(96, 6, 70), GRANITE, M.Granite)
+		for k = 1, 6 do
+			box(m, Hc * CFrame.new(0, 6 - k, -35 - k * 2 + 1), Vector3.new(30, 2, 2), GRANITE, M.Granite)
 		end
-		if x == 0 then
-			Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+		box(m, Hc * CFrame.new(0, 18, 4), Vector3.new(72, 24, 46), PLASTER, M.Plaster)
+		for x = -36, 36, 9 do
+			column(m, (Hc * CFrame.new(x, 6, -27)).Position, 24, 2.6, VERMILION, M.SmoothPlastic)
+			column(m, (Hc * CFrame.new(x, 6, 4 - 23)).Position, 24, 2, WOOD, M.Wood, NOSHADOW)
 		end
-	end
-	local bigLantern = Util.ellipsoid(m, Hc * CFrame.new(0, 24, -29), Vector3.new(6, 9, 6), rgb(220, 60, 40), M.Neon, NOCOL_NOSHADOW)
-	Util.pointLight(bigLantern, rgb(255, 120, 70), 2, 34)
-	box(m, Hc * CFrame.new(0, 8.4, -30), Vector3.new(8, 3.6, 4), rgb(100, 70, 46), M.WoodPlanks)
-	-- double roof
-	snowyHip(m, Hc * CFrame.new(0, 30.4, 4), 100, 74, 12, TILE)
-	box(m, Hc * CFrame.new(0, 40, 4), Vector3.new(60, 10, 34), PLASTER, M.Plaster)
-	box(m, Hc * CFrame.new(0, 45.2, 4), Vector3.new(62, 1.2, 36), VERMILION, M.SmoothPlastic, NOSHADOW)
-	snowyHip(m, Hc * CFrame.new(0, 45.8, 4), 80, 54, 18, TILE)
-	for _, x in ipairs({ -22, 22 }) do
-		local p = (Hc * CFrame.new(x, 64.6, 4)).Position
-		box(m, CFrame.new(p) * T.Rotation * CFrame.Angles(0, 0, x > 0 and -0.3 or 0.3), Vector3.new(2, 6, 2), GOLD, M.Foil, NOSHADOW)
+		box(m, Hc * CFrame.new(0, 29.5, -27), Vector3.new(76, 2, 2.4), VERMILION, M.SmoothPlastic)
+		box(m, Hc * CFrame.new(0, 7.2, -24), Vector3.new(76, 0.6, 8), WOOD_LIGHT, M.WoodPlanks)
+		box(m, Hc * CFrame.new(0, 9, -27.6), Vector3.new(72, 0.5, 0.5), VERMILION, M.SmoothPlastic, NOSHADOW)
+		for _, x in ipairs({ -18, 0, 18 }) do
+			local door = box(m, Hc * CFrame.new(x, 15, -19.2), Vector3.new(12, 16, 0.6), rgb(96, 64, 42), M.Wood, NOSHADOW)
+			for _, y in ipairs({ 10, 14, 18, 22 }) do
+				box(m, Hc * CFrame.new(x, y, -19.6), Vector3.new(12, 0.3, 0.3), WOOD, M.Wood, NOCOL_NOSHADOW)
+			end
+			if x == 0 then
+				Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+			end
+		end
+		local bigLantern = Util.ellipsoid(m, Hc * CFrame.new(0, 24, -29), Vector3.new(6, 9, 6), rgb(220, 60, 40), M.Neon, NOCOL_NOSHADOW)
+		Util.pointLight(bigLantern, rgb(255, 120, 70), 2, 34)
+		box(m, Hc * CFrame.new(0, 8.4, -30), Vector3.new(8, 3.6, 4), rgb(100, 70, 46), M.WoodPlanks)
+		-- double roof
+		snowyHip(m, Hc * CFrame.new(0, 30.4, 4), 100, 74, 12, TILE)
+		box(m, Hc * CFrame.new(0, 40, 4), Vector3.new(60, 10, 34), PLASTER, M.Plaster)
+		box(m, Hc * CFrame.new(0, 45.2, 4), Vector3.new(62, 1.2, 36), VERMILION, M.SmoothPlastic, NOSHADOW)
+		snowyHip(m, Hc * CFrame.new(0, 45.8, 4), 80, 54, 18, TILE)
+		for _, x in ipairs({ -22, 22 }) do
+			local p = (Hc * CFrame.new(x, 64.6, 4)).Position
+			box(m, CFrame.new(p) * T.Rotation * CFrame.Angles(0, 0, x > 0 and -0.3 or 0.3), Vector3.new(2, 6, 2), GOLD, M.Foil, NOSHADOW)
+		end
 	end
 	for _, s in ipairs({ -1, 1 }) do
 		komainu(m, Hc * CFrame.new(s * 22, 0.6, -50))
 	end
 
-	pagoda(m, (T * CFrame.new(64, 0, -40)).Position)
+	pagoda(m, (T * CFrame.new(64, 0, -40)).Position, T.LookVector)
 	bellTower(m, T * CFrame.new(-62, 0, -44))
 
 	-- sacred cedar wrapped in a shimenawa rope

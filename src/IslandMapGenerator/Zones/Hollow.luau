@@ -12,6 +12,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Hollow = {}
 
@@ -43,21 +44,29 @@ local function buildBastion(parent, rng)
 	local R, sink = 450, 120
 	local toCenter = Vector3.new(-G.X, 0, -G.Z).Unit
 
-	ball(m, G - Vector3.new(0, sink, 0), R * 2, WHITE, M.Concrete)
-	for _, y in ipairs({ 40, 130, 220, 290 }) do
-		local yy = y + sink
-		local d = 2 * math.sqrt(R * R - yy * yy) + 3
-		disc(m, G + Vector3.new(0, y, 0), 5, d, PALE, M.Concrete, NOSHADOW)
-	end
+	-- the dome, its crown spire and the great gate (one mesh, gate facing the island centre)
+	local dome = AssetLibrary.place("Bastion", m, flatCF(G, toCenter))
+	if dome then
+		dome.Name = "Dome"
+		local beacon = AssetLibrary.anchor(dome, flatCF(G, toCenter), Vector3.new(0, 0, 668), "Beacon")
+		Util.pointLight(beacon, SPIRIT, 3, 60)
+	else
+		ball(m, G - Vector3.new(0, sink, 0), R * 2, WHITE, M.Concrete)
+		for _, y in ipairs({ 40, 130, 220, 290 }) do
+			local yy = y + sink
+			local d = 2 * math.sqrt(R * R - yy * yy) + 3
+			disc(m, G + Vector3.new(0, y, 0), 5, d, PALE, M.Concrete, NOSHADOW)
+		end
 
-	-- crown spire on top of the dome
-	local top = G + Vector3.new(0, R - sink, 0)
-	column(m, top - Vector3.new(0, 20, 0), 140, 46, WHITE, M.Concrete)
-	disc(m, top + Vector3.new(0, 120, 0), 6, 64, PALE, M.Concrete)
-	column(m, top + Vector3.new(0, 123, 0), 90, 22, WHITE, M.Concrete)
-	rod(m, top + Vector3.new(0, 210, 0), top + Vector3.new(0, 330, 0), 6, WHITE, M.Concrete)
-	local beacon = ball(m, top + Vector3.new(0, 332, 0), 8, SPIRIT, M.Neon, NOSHADOW)
-	Util.pointLight(beacon, SPIRIT, 3, 60)
+		-- crown spire on top of the dome
+		local top = G + Vector3.new(0, R - sink, 0)
+		column(m, top - Vector3.new(0, 20, 0), 140, 46, WHITE, M.Concrete)
+		disc(m, top + Vector3.new(0, 120, 0), 6, 64, PALE, M.Concrete)
+		column(m, top + Vector3.new(0, 123, 0), 90, 22, WHITE, M.Concrete)
+		rod(m, top + Vector3.new(0, 210, 0), top + Vector3.new(0, 330, 0), 6, WHITE, M.Concrete)
+		local beacon = ball(m, top + Vector3.new(0, 332, 0), 8, SPIRIT, M.Neon, NOSHADOW)
+		Util.pointLight(beacon, SPIRIT, 3, 60)
+	end
 
 	-- needle towers around the dome
 	for k = 0, 6 do
@@ -65,6 +74,15 @@ local function buildBastion(parent, rng)
 		local dir = Vector3.new(math.cos(a), 0, math.sin(a))
 		local base = ground(G + dir * (R + rng:NextNumber(70, 140)))
 		local h = rng:NextNumber(220, 420)
+		-- the mesh is 320 studs to its top disc, with the glowing tip at 413
+		local needle = AssetLibrary.place("NeedleTower", m, flatCF(base, -dir), h / 320)
+		if needle then
+			if k % 2 == 0 then
+				local tip = AssetLibrary.anchor(needle, flatCF(base, -dir), Vector3.new(0, 0, 413), "Tip")
+				Util.pointLight(tip, SPIRIT, 2, 40)
+			end
+			continue
+		end
 		box(m, CFrame.new(base + Vector3.new(0, 8, 0)), Vector3.new(44, 24, 44), PALE, M.Concrete)
 		column(m, base, h, 26, WHITE, M.Concrete)
 		disc(m, base + Vector3.new(0, h * 0.55, 0), 4, 36, PALE, M.Concrete, NOSHADOW)
@@ -79,13 +97,15 @@ local function buildBastion(parent, rng)
 
 	-- the great gate, facing the island center
 	local gatePos = G + toCenter * (math.sqrt(R * R - sink * sink) - 18)
-	local gcf = flatCF(gatePos, toCenter)
-	box(m, gcf * CFrame.new(0, 45, 0), Vector3.new(64, 92, 60), rgb(10, 10, 14), M.SmoothPlastic)
-	for _, s in ipairs({ -1, 1 }) do
-		box(m, gcf * CFrame.new(s * 40, 55, -26), Vector3.new(16, 112, 18), WHITE, M.Concrete)
+	if not dome then
+		local gcf = flatCF(gatePos, toCenter)
+		box(m, gcf * CFrame.new(0, 45, 0), Vector3.new(64, 92, 60), rgb(10, 10, 14), M.SmoothPlastic)
+		for _, s in ipairs({ -1, 1 }) do
+			box(m, gcf * CFrame.new(s * 40, 55, -26), Vector3.new(16, 112, 18), WHITE, M.Concrete)
+		end
+		box(m, gcf * CFrame.new(0, 116, -26), Vector3.new(98, 16, 20), WHITE, M.Concrete)
+		box(m, gcf * CFrame.new(0, 100, -31), Vector3.new(64, 3, 4), SPIRIT, M.Neon, NOCOL_NOSHADOW)
 	end
-	box(m, gcf * CFrame.new(0, 116, -26), Vector3.new(98, 16, 20), WHITE, M.Concrete)
-	box(m, gcf * CFrame.new(0, 100, -31), Vector3.new(64, 3, 4), SPIRIT, M.Neon, NOCOL_NOSHADOW)
 
 	-- processional road of white slabs and pillars leading to the gate
 	for k = 0, 34 do

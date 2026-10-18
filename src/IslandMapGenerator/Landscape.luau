@@ -153,7 +153,7 @@ Landscape.MAX_COAST = R * 1.12
 -- Features (filled in by init) -------------------------------------------------
 local craters = {}
 local lakes = {}
-local hills = {}
+local plateaus = {}
 local pads = {}
 local corridor
 local rampBottom = {}
@@ -194,12 +194,6 @@ local function featureHeight(x, z, h, withLakes)
 			h += c.r * 0.07 * exp(-((dc - c.r) / (0.22 * c.r)) ^ 2)
 		end
 	end
-	for _, hl in ipairs(hills) do
-		local dd = (x - hl.x) ^ 2 + (z - hl.z) ^ 2
-		if dd < (hl.r * 3) ^ 2 then
-			h += hl.h * exp(-dd / (hl.r * hl.r))
-		end
-	end
 	if withLakes then
 		for _, lk in ipairs(lakes) do
 			local dx, dz = x - lk.x, z - lk.z
@@ -208,6 +202,21 @@ local function featureHeight(x, z, h, withLakes)
 				local dl = sqrt(dd) * (1 + 0.12 * n2(x, z, 1 / 120, 70))
 				local bowl = 1 - smooth(lk.r * 0.45, lk.r, dl)
 				h = lerp(h, lk.level - lk.depth, bowl)
+			end
+		end
+		-- flat-topped plateaus: a sheer straight cliff on one side, gentle slopes elsewhere
+		for _, pl in ipairs(plateaus) do
+			local dx, dz = x - pl.x, z - pl.z
+			if abs(dx) < pl.reach and abs(dz) < pl.reach then
+				local u = dx * pl.fx + dz * pl.fz
+				local v = abs(-dx * pl.fz + dz * pl.fx) + 14 * n2(x, z, 1 / 90, 72)
+				local back = -u + 14 * n2(x, z, 1 / 90, 73)
+				local m = (1 - smooth(pl.r, pl.r + pl.steep, u))
+					* (1 - smooth(pl.r, pl.r + pl.gentle, back))
+					* (1 - smooth(pl.r * 0.8, pl.r * 0.8 + pl.gentle * 0.7, v))
+				if m > 0 then
+					h = lerp(h, pl.top, m)
+				end
 			end
 		end
 	end
@@ -356,7 +365,8 @@ local function core(x, z)
 		local dd = (x - lk.x) ^ 2 + (z - lk.z) ^ 2
 		if dd < (lk.r * 1.25) ^ 2 then
 			lastWater = max(lastWater, lk.level)
-			lastFrozen = lk.frozen
+			-- frozen ponds keep open water in the middle; ice only along the shore
+			lastFrozen = lk.frozen and sqrt(dd) > lk.r * (0.6 + 0.08 * n2(x, z, 1 / 40, 71))
 			lastLakebed = h < lk.level + 1
 		end
 	end
@@ -394,13 +404,7 @@ function Landscape.init()
 		})
 	end
 
-	-- Forest lake with a rocky hill on its far side for the waterfall
 	local lake = L.ForestLake
-	local outward = lake.Unit
-	local hillPos = lake + outward * 360
-	table.insert(hills, { x = hillPos.X, z = hillPos.Z, r = 170, h = 85 })
-	Landscape.WaterfallHill = hillPos
-
 	local function addLake(pos, r, depth, frozen)
 		local level = math.huge
 		for k = 0, 47 do
@@ -414,6 +418,31 @@ function Landscape.init()
 	end
 	Landscape.ForestLakeLevel = addLake(lake, 330, 24, false)
 	Landscape.SnowPondLevel = addLake(L.SnowPond, 120, 10, true)
+
+	-- Rocky plateau on the far side of Mirror Lake. Its lake-facing cliff runs along a
+	-- voxel grid line so the terrain-water waterfall pouring off it has straight edges.
+	do
+		local out = lake.Unit
+		local fx, fz = 0, 0 -- direction from the plateau toward the lake (a cardinal axis)
+		if abs(out.X) > abs(out.Z) then
+			fx = out.X > 0 and -1 or 1
+		else
+			fz = out.Z > 0 and -1 or 1
+		end
+		local r = 124
+		local cx = floor((lake.X - fx * (r + 200)) / 4 + 0.5) * 4
+		local cz = floor((lake.Z - fz * (r + 200)) / 4 + 0.5) * 4
+		local center = Vector3.new(cx, 0, cz)
+		local top = floor((rawHeight(center, true) + 72) / 4) * 4
+		table.insert(plateaus, { x = cx, z = cz, fx = fx, fz = fz, r = r, steep = 6, gentle = 150, top = top, reach = r + 200 })
+		Landscape.Waterfall = {
+			center = Vector3.new(cx, top, cz),
+			f = Vector3.new(fx, 0, fz),
+			r = r,
+			top = top,
+			level = Landscape.ForestLakeLevel,
+		}
+	end
 
 	-- Flattened building sites
 	local function addPad(pos, r, fall, raise)

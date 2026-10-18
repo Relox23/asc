@@ -25,7 +25,8 @@ Config.Build = {
 Config.PLAYER_START = "Forest"
 
 -- Multiplies how many trees, bushes and rocks are scattered.
--- 1 = full forests (~150k parts in total). Lower it on weaker PCs or for mobile.
+-- 1 = full forests: about 40k parts with the imported IslandAssets meshes
+-- (125k when everything is built from parts). Lower it on weaker PCs or for mobile.
 Config.FOLIAGE_DENSITY = 1
 
 -- Delete the existing terrain and the previously generated map before building.

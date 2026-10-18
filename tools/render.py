@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tiny software renderer to eyeball the generated map without Studio.
 
-usage: render.py <luau binary> <out dir>
+usage: render.py <luau binary> <out dir> [view,view,...]
 Renders a set of camera views (parts + terrain heightmap + terrain fills).
+tools/blender/render_map.py renders the same views in Blender, with the
+detailed meshes.
 """
 import json
 import math
@@ -11,14 +13,9 @@ import subprocess
 import sys
 
 import numpy as np
-from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent
-LUAU = sys.argv[1]
-OUT = pathlib.Path(sys.argv[2])
-OUT.mkdir(parents=True, exist_ok=True)
 W, H = 760, 430
-ONLY = sys.argv[3].split(",") if len(sys.argv) > 3 else None
 
 MAT = {
     "Grass": (92, 156, 66), "LeafyGrass": (70, 128, 54), "Ground": (112, 88, 62),
@@ -26,27 +23,30 @@ MAT = {
     "Pavement": (204, 184, 146), "Salt": (236, 237, 242), "Slate": (176, 180, 190),
     "Mud": (30, 28, 32), "Basalt": (56, 52, 54), "Snow": (242, 247, 255),
     "Glacier": (190, 222, 238), "Ice": (166, 208, 232), "Rock": (116, 117, 124),
-    "Cobblestone": (128, 124, 118),
+    "Cobblestone": (128, 124, 118), "Water": (40, 150, 175),
 }
 
 # Layout constants are read from the Luau side through the view list below.
 VIEWS = json.loads((ROOT / "render_views.json").read_text())
 
 
-def luau_views():
+def luau_views(views=None):
     items = []
-    for v in VIEWS:
+    for v in views or VIEWS:
         c = v["center"]
         items.append("{ center = Vector3.new(%f, 0, %f), radius = %f, step = %f }" % (c[0], c[1], v["radius"], v["step"]))
     return "{ " + ", ".join(items) + " }"
 
 
-def run_luau():
-    drv = OUT / "render.driver.luau"
-    drv.write_text((ROOT / "render_driver.luau").read_text().replace("__VIEWS__", luau_views()))
-    bundle = OUT / "render.bundle.luau"
+def run_luau(luau, out, prelude="", views=None):
+    """Build the map in the mock and return the driver's dump (prelude = Luau run first)."""
+    out = pathlib.Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    drv = out / "render.driver.luau"
+    drv.write_text(prelude + "\n" + (ROOT / "render_driver.luau").read_text().replace("__VIEWS__", luau_views(views)))
+    bundle = out / "render.bundle.luau"
     subprocess.run([sys.executable, str(ROOT / "bundle.py"), str(drv), str(bundle)], check=True)
-    res = subprocess.run([LUAU, str(bundle)], capture_output=True, text=True)
+    res = subprocess.run([luau, str(bundle)], capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stdout[-2000:])
         print(res.stderr[-4000:])
@@ -120,7 +120,7 @@ def cyl_mesh(n=14, axis=0):
 
 
 MESH = {"B": box_mesh(), "W": wedge_mesh(), "S": sphere_mesh(), "E": sphere_mesh(), "C": cyl_mesh(),
-        "ball": sphere_mesh(), "cyl": cyl_mesh(axis=1)}
+        "ball": sphere_mesh(), "cyl": cyl_mesh(axis=1), "block": box_mesh()}
 
 SUN = np.array([0.45, 0.8, 0.35])
 SUN /= np.linalg.norm(SUN)
@@ -151,6 +151,8 @@ class Camera:
 
 
 def render_view(view, parts, fills, terrain):
+    from PIL import Image
+
     cam = Camera(view["eye"], view["target"], view.get("fov", 60))
     sky_top, sky_bot = np.array(view.get("sky", [110, 160, 220])), np.array([215, 225, 235])
     img = np.zeros((H, W, 3))
@@ -283,9 +285,8 @@ def parse(out):
             s = line.split()
             kind = s[1]
             cf = np.array([float(x) for x in s[2:14]])
-            r, hgt = float(s[14]), float(s[15])
-            size = np.array([2 * r, 2 * r, 2 * r]) if kind == "ball" else np.array([2 * r, hgt, 2 * r])
-            cur["fills"].append((kind, cf, size, list(MAT.get(s[16], (255, 0, 255))), s[16]))
+            size = np.array([float(x) for x in s[14:17]])
+            cur["fills"].append((kind, cf, size, list(MAT.get(s[17], (255, 0, 255))), s[17]))
         elif line.startswith("T "):
             s = line.split()
             cur["t"] = (float(s[1]), float(s[2]), float(s[3]), int(s[4]))
@@ -294,18 +295,22 @@ def parse(out):
     return sections
 
 
+def terrain_arrays(sec):
+    x0, z0, step, n = sec["t"]
+    hts = np.array([[float(c[0]) for c in r] for r in sec["rows"]])
+    water = np.array([[float(c[2]) for c in r] for r in sec["rows"]])
+    mats = np.array([[MAT.get(c[1], (255, 0, 255)) for c in r] for r in sec["rows"]], float)
+    return x0, z0, step, hts, mats, water
+
+
 def main():
-    out = run_luau()
-    sections = parse(out)
-    for view, sec in zip(VIEWS, sections):
-        if ONLY and view["name"] not in ONLY:
-            continue
-        x0, z0, step, n = sec["t"]
-        hts = np.array([[float(c[0]) for c in r] for r in sec["rows"]])
-        water = np.array([[float(c[2]) for c in r] for r in sec["rows"]])
-        mats = np.array([[MAT.get(c[1], (255, 0, 255)) for c in r] for r in sec["rows"]], float)
-        im = render_view(view, sec["parts"], sec["fills"], (x0, z0, step, hts, mats, water))
-        im.save(OUT / f"{view['name']}.png")
+    luau, out = sys.argv[1], pathlib.Path(sys.argv[2])
+    only = sys.argv[3].split(",") if len(sys.argv) > 3 else None
+    views = [v for v in VIEWS if not only or v["name"] in only]
+    sections = parse(run_luau(luau, out, views=views))
+    for view, sec in zip(views, sections):
+        im = render_view(view, sec["parts"], sec["fills"], terrain_arrays(sec))
+        im.save(out / f"{view['name']}.png")
         print("rendered", view["name"], len(sec["parts"]), "parts")
 
 

@@ -12,6 +12,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Watchtower = require(script.Parent.Parent.Watchtower)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Dunes = {}
 
@@ -38,7 +39,43 @@ local function ground(p)
 end
 
 -- Colossal buried statue and hand --------------------------------------------------------------------
+local HAND = AssetLibrary.fromBlender(110, -10, 0) -- where the mesh's hand comes out of the sand
+
+-- The statue mesh, sunk into the sand and looking up at the sky. It also holds
+-- the hand, so pick the heading where the ground under the hand is closest in
+-- height and roll the statue a little to make up the rest.
+local function statueMesh(parent, rng, pos)
+	if not AssetLibrary.has("Colossus") then
+		return nil
+	end
+	local best, bestDiff
+	local start = rng:NextNumber(0, TAU)
+	for k = 0, 11 do
+		local a = start + k / 12 * TAU
+		local face = Vector3.new(math.cos(a), 0, math.sin(a))
+		local hand = (flatCF(pos, face) * CFrame.new(HAND)).Position
+		local diff = math.abs(Landscape.heightAt(hand.X, hand.Z) - pos.Y)
+		if not best or diff < bestDiff then
+			best, bestDiff = face, diff
+		end
+	end
+	local cf = flatCF(pos - Vector3.new(0, 18, 0), best) * CFrame.Angles(0.25, 0, 0)
+	local hand = (cf * CFrame.new(HAND)).Position
+	local want = Landscape.heightAt(hand.X, hand.Z) - 3
+	local roll = math.clamp(math.asin(math.clamp((hand.Y - want) / HAND.Magnitude, -1, 1)), -0.3, 0.3)
+	cf = cf * CFrame.Angles(0, 0, roll)
+	local m = AssetLibrary.place("Colossus", parent, cf)
+	m.Name = "BuriedColossus"
+	-- sand drifted around the wrist
+	workspace.Terrain:FillBall((cf * CFrame.new(HAND)).Position - Vector3.new(0, 4, 0), 12, M.Sand)
+	return m
+end
+
 local function buriedStatue(parent, rng, pos)
+	local mesh = statueMesh(parent, rng, pos)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "BuriedColossus")
 	local face = Vector3.new(rng:NextNumber(-1, 1), 0, rng:NextNumber(-1, 1)).Unit
 	local cf = flatCF(pos - Vector3.new(0, 18, 0), face) * CFrame.Angles(0.25, 0, 0.18)
@@ -73,6 +110,11 @@ end
 
 -- Lost caravan -------------------------------------------------------------------------------------------
 local function caravan(parent, rng, pos)
+	local mesh = AssetLibrary.place("Caravan", parent, CFrame.new(pos - Vector3.new(0, 1, 0)) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0) * CFrame.Angles(0, 0, 0.08))
+	if mesh then
+		mesh.Name = "LostCaravan"
+		return mesh
+	end
 	local m = Util.model(parent, "LostCaravan")
 	local cf = CFrame.new(pos - Vector3.new(0, 1.5, 0)) * CFrame.Angles(0, rng:NextNumber(0, TAU), 0) * CFrame.Angles(0, 0, 0.2)
 	local wood = rgb(120, 86, 56)

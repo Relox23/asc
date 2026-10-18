@@ -12,6 +12,7 @@ local TerrainWriter = require(script.Parent.Parent.TerrainWriter)
 local Util = require(script.Parent.Parent.Util)
 local Props = require(script.Parent.Parent.Props)
 local Config = require(script.Parent.Parent.Config)
+local AssetLibrary = require(script.Parent.Parent.AssetLibrary)
 
 local Snow = {}
 
@@ -81,6 +82,11 @@ end
 
 -- Torii gate standing at cf (ground center); people walk through along cf's Z axis.
 local function torii(parent, cf, width, height, color)
+	-- the mesh's pillars stand 16 apart
+	local mesh = AssetLibrary.place("Torii", parent, cf, width / 16, color and { Vermilion = color })
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "Torii")
 	color = color or VERMILION
 	for _, s in ipairs({ -1, 1 }) do
@@ -96,8 +102,35 @@ local function torii(parent, cf, width, height, color)
 	return m
 end
 
+local function chimneySmoke(part)
+	Util.particles(part, {
+		Texture = Util.TEX.smoke,
+		Color = Util.cs(rgb(230, 230, 232), rgb(190, 190, 196)),
+		Size = Util.ns(0, 1, 1, 6),
+		Transparency = Util.ns(0, 0.5, 1, 1),
+		Lifetime = NumberRange.new(5, 8),
+		Rate = 2,
+		Speed = NumberRange.new(2, 3),
+		SpreadAngle = Vector2.new(8, 8),
+		EmissionDirection = Enum.NormalId.Top,
+		LightInfluence = 1,
+	})
+end
+
 -- Minka (farmhouse) at cf ground center, front facing -Z.
 local function minka(parent, rng, cf, W, D, thatched)
+	-- the meshes are 22 x 16; scale by the requested width
+	local mesh = AssetLibrary.place(thatched and "Minka_Thatch" or "Minka_Tile", parent, cf, W / 22)
+	if mesh then
+		mesh.Name = "Minka"
+		chimneySmoke(AssetLibrary.anchor(mesh, cf, Vector3.new(0, 0, thatched and 26.5 or 22.5), "Smoke"))
+		local lamp = AssetLibrary.anchor(mesh, cf, Vector3.new(9.5, -11.6, 10.3), "Lantern")
+		Util.pointLight(lamp, rgb(255, 130, 80), 1.2, 18)
+		-- warm light glowing out through the paper screens
+		local screen = AssetLibrary.anchor(mesh, cf, Vector3.new(0, -8.4, 7.2), "ScreenGlow")
+		Util.surfaceLight(screen, Enum.NormalId.Front, rgb(255, 206, 140), 1.4, 16, 100)
+		return mesh
+	end
 	local m = Util.model(parent, "Minka")
 	box(m, cf * CFrame.new(0, 0.2, 0), Vector3.new(W + 3, 2.4, D + 3), GRANITE, M.Granite)
 	box(m, cf * CFrame.new(0, 2, 0), Vector3.new(W, 1.2, D), WOOD_LIGHT, M.WoodPlanks)
@@ -135,18 +168,7 @@ local function minka(parent, rng, cf, W, D, thatched)
 	snowyGable(m, roofCF, D + 9, W + 7, rise, thatched and THATCH or TILE, thatched and M.Grass or M.ClayRoofTiles)
 	box(m, cf * CFrame.new(0, 12.8 + rise + 1, 0), Vector3.new(W + 8, 1.6, 2), WOOD, M.Wood, NOSHADOW)
 	local ridge = box(m, cf * CFrame.new(0, 12.8 + rise + 2.1, 0), Vector3.new(W + 8, 0.8, 2.6), SNOW, M.Snow, NOSHADOW)
-	Util.particles(ridge, {
-		Texture = Util.TEX.smoke,
-		Color = Util.cs(rgb(230, 230, 232), rgb(190, 190, 196)),
-		Size = Util.ns(0, 1, 1, 6),
-		Transparency = Util.ns(0, 0.5, 1, 1),
-		Lifetime = NumberRange.new(5, 8),
-		Rate = 2,
-		Speed = NumberRange.new(2, 3),
-		SpreadAngle = Vector2.new(8, 8),
-		EmissionDirection = Enum.NormalId.Top,
-		LightInfluence = 1,
-	})
+	chimneySmoke(ridge)
 	redLantern(m, (cf * CFrame.new(W / 2 - 1.5, 10, -D / 2 - 3.5)).Position)
 
 	-- firewood and a barrel by the side
@@ -270,7 +292,12 @@ local function jizo(parent, pos, facing)
 end
 
 -- Temple --------------------------------------------------------------------------------------------
-local function pagoda(parent, base)
+local function pagoda(parent, base, facing)
+	local mesh = AssetLibrary.place("Pagoda", parent, flatCF(base, facing))
+	if mesh then
+		mesh.Name = "FiveStoreyPagoda"
+		return mesh
+	end
 	local m = Util.model(parent, "FiveStoreyPagoda")
 	box(m, CFrame.new(base + Vector3.new(0, 1.5, 0)), Vector3.new(28, 3, 28), GRANITE, M.Granite)
 	local y = 3
@@ -294,6 +321,10 @@ local function pagoda(parent, base)
 end
 
 local function bellTower(parent, cf)
+	local mesh = AssetLibrary.place("BellPavilion", parent, cf)
+	if mesh then
+		return mesh
+	end
 	local m = Util.model(parent, "BellPavilion")
 	box(m, cf * CFrame.new(0, 1.5, 0), Vector3.new(22, 3, 22), GRANITE, M.Granite)
 	for _, c in ipairs({ { -8, -8 }, { 8, -8 }, { -8, 8 }, { 8, 8 } }) do
@@ -357,22 +388,31 @@ local function buildTemple(parent, rng)
 
 	-- sanmon (two-storey gate)
 	local G = T * CFrame.new(0, 0, -100)
-	box(m, G * CFrame.new(0, 0.4, 0), Vector3.new(48, 2, 20), GRANITE, M.Granite)
-	for _, x in ipairs({ -18, -6, 6, 18 }) do
-		for _, z in ipairs({ -6, 6 }) do
-			column(m, (G * CFrame.new(x, 1, z)).Position, 20, 2.6, VERMILION, M.SmoothPlastic)
+	local gate = AssetLibrary.place("TempleGate", m, G)
+	if gate then
+		gate.Name = "Sanmon"
+		-- the name board's black panel sits at Blender (0, -6.75, 27); the text goes just in front of it
+		local plaque = box(gate, G * CFrame.new(AssetLibrary.fromBlender(0, -7.12, 27)), Vector3.new(10.2, 4.2, 0.1), rgb(30, 28, 28), M.SmoothPlastic, NOCOL_NOSHADOW)
+		plaque.Name = "NameBoard"
+		label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
+	else
+		box(m, G * CFrame.new(0, 0.4, 0), Vector3.new(48, 2, 20), GRANITE, M.Granite)
+		for _, x in ipairs({ -18, -6, 6, 18 }) do
+			for _, z in ipairs({ -6, 6 }) do
+				column(m, (G * CFrame.new(x, 1, z)).Position, 20, 2.6, VERMILION, M.SmoothPlastic)
+			end
 		end
+		box(m, G * CFrame.new(0, 20.6, 0), Vector3.new(40, 1.6, 14), VERMILION, M.SmoothPlastic)
+		snowyHip(m, G * CFrame.new(0, 21.4, 0), 54, 28, 7, TILE)
+		box(m, G * CFrame.new(0, 28, 0), Vector3.new(32, 9, 11), PLASTER, M.Plaster)
+		for _, x in ipairs({ -16, -5.3, 5.3, 16 }) do
+			box(m, G * CFrame.new(x, 28, -5.6), Vector3.new(1, 9, 0.6), VERMILION, M.SmoothPlastic, NOSHADOW)
+		end
+		box(m, G * CFrame.new(0, 32.4, 0), Vector3.new(34, 1.2, 13), VERMILION, M.SmoothPlastic, NOSHADOW)
+		snowyHip(m, G * CFrame.new(0, 33, 0), 46, 24, 9, TILE)
+		local plaque = box(m, G * CFrame.new(0, 26.4, -6.4), Vector3.new(10, 4, 0.6), rgb(40, 32, 28), M.Wood, NOSHADOW)
+		label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
 	end
-	box(m, G * CFrame.new(0, 20.6, 0), Vector3.new(40, 1.6, 14), VERMILION, M.SmoothPlastic)
-	snowyHip(m, G * CFrame.new(0, 21.4, 0), 54, 28, 7, TILE)
-	box(m, G * CFrame.new(0, 28, 0), Vector3.new(32, 9, 11), PLASTER, M.Plaster)
-	for _, x in ipairs({ -16, -5.3, 5.3, 16 }) do
-		box(m, G * CFrame.new(x, 28, -5.6), Vector3.new(1, 9, 0.6), VERMILION, M.SmoothPlastic, NOSHADOW)
-	end
-	box(m, G * CFrame.new(0, 32.4, 0), Vector3.new(34, 1.2, 13), VERMILION, M.SmoothPlastic, NOSHADOW)
-	snowyHip(m, G * CFrame.new(0, 33, 0), 46, 24, 9, TILE)
-	local plaque = box(m, G * CFrame.new(0, 26.4, -6.4), Vector3.new(10, 4, 0.6), rgb(40, 32, 28), M.Wood, NOSHADOW)
-	label(plaque, Enum.NormalId.Front, "龍洞寺", GOLD)
 	for _, x in ipairs({ -12, 12 }) do
 		redLantern(m, (G * CFrame.new(x, 17, -8)).Position)
 	end
@@ -386,44 +426,53 @@ local function buildTemple(parent, rng)
 
 	-- main hall
 	local Hc = T * CFrame.new(0, 0, 36)
-	box(m, Hc * CFrame.new(0, 3, 0), Vector3.new(96, 6, 70), GRANITE, M.Granite)
-	for k = 1, 6 do
-		box(m, Hc * CFrame.new(0, 6 - k, -35 - k * 2 + 1), Vector3.new(30, 2, 2), GRANITE, M.Granite)
-	end
-	box(m, Hc * CFrame.new(0, 18, 4), Vector3.new(72, 24, 46), PLASTER, M.Plaster)
-	for x = -36, 36, 9 do
-		column(m, (Hc * CFrame.new(x, 6, -27)).Position, 24, 2.6, VERMILION, M.SmoothPlastic)
-		column(m, (Hc * CFrame.new(x, 6, 4 - 23)).Position, 24, 2, WOOD, M.Wood, NOSHADOW)
-	end
-	box(m, Hc * CFrame.new(0, 29.5, -27), Vector3.new(76, 2, 2.4), VERMILION, M.SmoothPlastic)
-	box(m, Hc * CFrame.new(0, 7.2, -24), Vector3.new(76, 0.6, 8), WOOD_LIGHT, M.WoodPlanks)
-	box(m, Hc * CFrame.new(0, 9, -27.6), Vector3.new(72, 0.5, 0.5), VERMILION, M.SmoothPlastic, NOSHADOW)
-	for _, x in ipairs({ -18, 0, 18 }) do
-		local door = box(m, Hc * CFrame.new(x, 15, -19.2), Vector3.new(12, 16, 0.6), rgb(96, 64, 42), M.Wood, NOSHADOW)
-		for _, y in ipairs({ 10, 14, 18, 22 }) do
-			box(m, Hc * CFrame.new(x, y, -19.6), Vector3.new(12, 0.3, 0.3), WOOD, M.Wood, NOCOL_NOSHADOW)
+	local hall = AssetLibrary.place("TempleHall", m, Hc)
+	if hall then
+		hall.Name = "MainHall"
+		local lantern = AssetLibrary.anchor(hall, Hc, Vector3.new(0, -29.5, 23.7), "GreatLantern")
+		Util.pointLight(lantern, rgb(255, 120, 70), 2, 34)
+		local door = AssetLibrary.anchor(hall, Hc, Vector3.new(0, -20.2, 15), "DoorGlow")
+		Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+	else
+		box(m, Hc * CFrame.new(0, 3, 0), Vector3.new(96, 6, 70), GRANITE, M.Granite)
+		for k = 1, 6 do
+			box(m, Hc * CFrame.new(0, 6 - k, -35 - k * 2 + 1), Vector3.new(30, 2, 2), GRANITE, M.Granite)
 		end
-		if x == 0 then
-			Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+		box(m, Hc * CFrame.new(0, 18, 4), Vector3.new(72, 24, 46), PLASTER, M.Plaster)
+		for x = -36, 36, 9 do
+			column(m, (Hc * CFrame.new(x, 6, -27)).Position, 24, 2.6, VERMILION, M.SmoothPlastic)
+			column(m, (Hc * CFrame.new(x, 6, 4 - 23)).Position, 24, 2, WOOD, M.Wood, NOSHADOW)
 		end
-	end
-	local bigLantern = Util.ellipsoid(m, Hc * CFrame.new(0, 24, -29), Vector3.new(6, 9, 6), rgb(220, 60, 40), M.Neon, NOCOL_NOSHADOW)
-	Util.pointLight(bigLantern, rgb(255, 120, 70), 2, 34)
-	box(m, Hc * CFrame.new(0, 8.4, -30), Vector3.new(8, 3.6, 4), rgb(100, 70, 46), M.WoodPlanks)
-	-- double roof
-	snowyHip(m, Hc * CFrame.new(0, 30.4, 4), 100, 74, 12, TILE)
-	box(m, Hc * CFrame.new(0, 40, 4), Vector3.new(60, 10, 34), PLASTER, M.Plaster)
-	box(m, Hc * CFrame.new(0, 45.2, 4), Vector3.new(62, 1.2, 36), VERMILION, M.SmoothPlastic, NOSHADOW)
-	snowyHip(m, Hc * CFrame.new(0, 45.8, 4), 80, 54, 18, TILE)
-	for _, x in ipairs({ -22, 22 }) do
-		local p = (Hc * CFrame.new(x, 64.6, 4)).Position
-		box(m, CFrame.new(p) * T.Rotation * CFrame.Angles(0, 0, x > 0 and -0.3 or 0.3), Vector3.new(2, 6, 2), GOLD, M.Foil, NOSHADOW)
+		box(m, Hc * CFrame.new(0, 29.5, -27), Vector3.new(76, 2, 2.4), VERMILION, M.SmoothPlastic)
+		box(m, Hc * CFrame.new(0, 7.2, -24), Vector3.new(76, 0.6, 8), WOOD_LIGHT, M.WoodPlanks)
+		box(m, Hc * CFrame.new(0, 9, -27.6), Vector3.new(72, 0.5, 0.5), VERMILION, M.SmoothPlastic, NOSHADOW)
+		for _, x in ipairs({ -18, 0, 18 }) do
+			local door = box(m, Hc * CFrame.new(x, 15, -19.2), Vector3.new(12, 16, 0.6), rgb(96, 64, 42), M.Wood, NOSHADOW)
+			for _, y in ipairs({ 10, 14, 18, 22 }) do
+				box(m, Hc * CFrame.new(x, y, -19.6), Vector3.new(12, 0.3, 0.3), WOOD, M.Wood, NOCOL_NOSHADOW)
+			end
+			if x == 0 then
+				Util.surfaceLight(door, Enum.NormalId.Front, rgb(255, 196, 120), 1, 20, 90)
+			end
+		end
+		local bigLantern = Util.ellipsoid(m, Hc * CFrame.new(0, 24, -29), Vector3.new(6, 9, 6), rgb(220, 60, 40), M.Neon, NOCOL_NOSHADOW)
+		Util.pointLight(bigLantern, rgb(255, 120, 70), 2, 34)
+		box(m, Hc * CFrame.new(0, 8.4, -30), Vector3.new(8, 3.6, 4), rgb(100, 70, 46), M.WoodPlanks)
+		-- double roof
+		snowyHip(m, Hc * CFrame.new(0, 30.4, 4), 100, 74, 12, TILE)
+		box(m, Hc * CFrame.new(0, 40, 4), Vector3.new(60, 10, 34), PLASTER, M.Plaster)
+		box(m, Hc * CFrame.new(0, 45.2, 4), Vector3.new(62, 1.2, 36), VERMILION, M.SmoothPlastic, NOSHADOW)
+		snowyHip(m, Hc * CFrame.new(0, 45.8, 4), 80, 54, 18, TILE)
+		for _, x in ipairs({ -22, 22 }) do
+			local p = (Hc * CFrame.new(x, 64.6, 4)).Position
+			box(m, CFrame.new(p) * T.Rotation * CFrame.Angles(0, 0, x > 0 and -0.3 or 0.3), Vector3.new(2, 6, 2), GOLD, M.Foil, NOSHADOW)
+		end
 	end
 	for _, s in ipairs({ -1, 1 }) do
 		komainu(m, Hc * CFrame.new(s * 22, 0.6, -50))
 	end
 
-	pagoda(m, (T * CFrame.new(64, 0, -40)).Position)
+	pagoda(m, (T * CFrame.new(64, 0, -40)).Position, T.LookVector)
 	bellTower(m, T * CFrame.new(-62, 0, -44))
 
 	-- sacred cedar wrapped in a shimenawa rope
