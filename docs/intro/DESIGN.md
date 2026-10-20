@@ -191,7 +191,8 @@ Roblox tool). Blender uses the same offset for the Child Of constraint.
 
 Real avatars differ in size. The runtime offsets the root by
 `(Humanoid.HipHeight + HRP.Size.Y/2) − 3.0` along the stage's up so feet land
-where the mannequin's do. R6 avatars get a best-effort mapping (§7.2).
+where the mannequin's do. The game only allows R15 avatars, so there is no R6
+support (an R6 character just skips the character animation).
 
 ### 4.5 Pose library
 
@@ -320,7 +321,7 @@ At Play start the client calls `player:RequestStreamAroundAsync(landing)`
 | `Assets` | Client-side loader of `IntroAssets` (ReplicatedStorage, or Workspace as fallback) using the marker scheme; styles of §6; `Tint` colouring; procedural fallbacks when an asset is missing so the cutscene still works without the import. |
 | `SpaceStage` | Builds the space stage at `SPACE_ORIGIN`: dome, stars, galaxies (point parts), nebulae (ParticleEmitters with the built-in smoke texture), planet, rift (cracks revealed in order by `crack`, shards flung outward and faded by `open`, rim + view scaled in by `open`), soul core + comet tail (Beams + Trail + sparkle emitter, length from `tail`), falling dust motes around the camera. `SkyAnchor` follows the camera every frame. |
 | `WorldStage` | Sky rift, soul core (world part), sword (pieces, `resonance` colour blend, `glow`, `held` → grip weld to RightHand), blast sphere, slash arc, shockwave ring + dust, speed streaks, tree bending (§7.3), `workspace.GlobalWind` gust. |
-| `CharacterRig` | Takes over the player's character: anchors HRP, stops/blocks animations (disables `Animate`, stops Animator tracks), disables controls, hides (`LocalTransparencyModifier`) during the space stage; each frame sets HRP CFrame and every Motor6D `Transform` from the data in `RunService.PreSimulation` (after the Animator, so it isn't overwritten); `form` → transparency + glow highlight; R6 mapping (`Root`·`Waist` → RootJoint, `Neck` → Neck, `*Shoulder` → `* Shoulder`, `*Hip` → `* Hip`, conjugated by each R6 C0 rotation); restores everything at the end and leaves the character standing at the final root position, unanchored. |
+| `CharacterRig` | Takes over the player's character: anchors HRP, stops/blocks animations (disables `Animate`, stops Animator tracks), disables controls, hides (`LocalTransparencyModifier`) during the space stage; each frame sets HRP CFrame and every Motor6D `Transform` from the data in `RunService.PreSimulation` (after the Animator, so it isn't overwritten); `form` → transparency + glow highlight; R15 only (no R6 mapping); restores everything at the end and leaves the character standing at the final root position, unanchored. |
 | `Screen` | ScreenGui (`IgnoreGuiInset`, DisplayOrder 100): cinematic bars (2.39:1 letterbox), black fades, colour flashes, impact frames, speed lines (Frames rotated around the centre with UIGradient taper — no image assets). |
 | `LightingFX` | Saves and restores every Lighting property and post effect it touches. Space look: ClockTime chosen for side light on the planet, black ambient, strong Bloom (Neon glow), ColorCorrection, no Atmosphere/Clouds (disabled, restored after). World stage: back to the saved look + a slight warm ColorCorrection. Sets `Lighting:SetAttribute("CutsceneActive", true)` while playing (the map's `IslandAtmosphere` script pauses while it is set). |
 | `Server.server.luau` | RemoteEvent + giving the sword (§7.0). |
