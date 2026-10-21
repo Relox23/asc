@@ -29,7 +29,8 @@
 	                                                     CoreShell, Wave, Arc) toward the tint
 	    Assets.setResonance(model or {parts}, tint, r)   Crystal: colourless glass (r 0) -> Neon tint (r 1)
 	    Assets.setOpacity(model or {parts}, opacity)     transparency = 1 - (1 - base) * opacity
-	    Assets.mover(model)          -> mover; mover:MoveTo(cf) moves all parts at once (BulkMoveTo)
+	    Assets.mover(model)          -> mover; mover:MoveTo(cf, scale?) moves (and uniformly scales)
+	                                 all parts at once (BulkMoveTo)
 	    Assets.part(parent, name, style, size, cf, shape?) -> Part  (styled, no collisions)
 	    Assets.preload(names?)       yields: ContentProvider:PreloadAsync on the imported meshes
 	    Assets.reset()               forget the cache (a new import is picked up)
@@ -552,18 +553,42 @@ local function bulkMove(parts, cframes)
 end
 
 -- Moves every part of a model at once, keeping their offsets from the model's pivot.
+-- mover:MoveTo(cf, scale?) also scales the model uniformly about its pivot (sizes and offsets,
+-- relative to the model as it was when the mover was made; parts are only resized when the
+-- scale changes).
 function Assets.mover(model)
 	local parts = Assets.pieces(model)
 	local pivot = model:GetPivot()
-	local offsets, cframes = {}, {}
+	local offsets, cframes, sizes = {}, {}, {}
 	for i, p in ipairs(parts) do
 		offsets[i] = pivot:ToObjectSpace(p.CFrame)
 		cframes[i] = p.CFrame
+		sizes[i] = p.Size
 	end
-	local mover = { model = model, parts = parts }
-	function mover:MoveTo(cf)
+	local mover = { model = model, parts = parts, scale = 1 }
+	local scaled -- offsets at the current scale (nil = scale 1)
+	function mover:MoveTo(cf, scale)
+		scale = scale or 1
+		if math.abs(scale - mover.scale) > 1e-4 * math.max(scale, 1e-3) then
+			mover.scale = scale
+			local s = math.max(scale, 1e-3)
+			if math.abs(s - 1) < 1e-6 then
+				scaled = nil
+			else
+				scaled = scaled or {}
+				for i = 1, #parts do
+					local o = offsets[i]
+					scaled[i] = o.Rotation + o.Position * s
+				end
+			end
+			for i = 1, #parts do
+				local sz = sizes[i] * s
+				parts[i].Size = Vector3.new(math.max(sz.X, 0.001), math.max(sz.Y, 0.001), math.max(sz.Z, 0.001))
+			end
+		end
+		local list = scaled or offsets
 		for i = 1, #parts do
-			cframes[i] = cf * offsets[i]
+			cframes[i] = cf * list[i]
 		end
 		local ok = bulkMoveWorks and pcall(bulkMove, parts, cframes)
 		if not ok then
