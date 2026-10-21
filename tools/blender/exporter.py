@@ -9,7 +9,9 @@ from mathutils import Vector
 import kit
 
 
-def export(objects, base_path, save_blend=True):
+def export(objects, base_path, save_blend=True, embed_textures=False):
+    """embed_textures: pack the image textures into the FBX (path_mode COPY) and reference them by
+    relative path from the .mtl, e.g. IntroAssets' RiftView texture."""
     for o in bpy.data.objects:
         o.select_set(o in objects)
     bpy.context.view_layer.objects.active = objects[0]
@@ -29,6 +31,8 @@ def export(objects, base_path, save_blend=True):
         bake_space_transform=True,
         global_scale=kit.EXPORT_SCALE,
         mesh_smooth_type="OFF",
+        path_mode="COPY" if embed_textures else "AUTO",
+        embed_textures=embed_textures,
     )
     bpy.ops.wm.obj_export(
         filepath=base_path + ".obj",
@@ -38,6 +42,7 @@ def export(objects, base_path, save_blend=True):
         global_scale=kit.EXPORT_SCALE,
         export_materials=True,
         export_normals=True,
+        path_mode="RELATIVE" if embed_textures else "AUTO",
     )
     if save_blend:
         bpy.ops.wm.save_as_mainfile(filepath=base_path + ".blend")
