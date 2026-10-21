@@ -8,7 +8,10 @@
 	Tolerances (DESIGN §9): position < 0.05 studs (camera < 0.02), rotation < 0.5 deg, scalar
 	channels < 0.01 (fov: 0.01 deg), joint rotations < 0.75 deg. Fixture times inside a sample
 	interval that contains a cut are skipped (the runtime holds the sample on t's side of a cut on
-	purpose; the exporter already avoids the 30 Hz ones, this catches lower-rate tracks).
+	purpose; the exporter already avoids the 30 Hz ones, this catches lower-rate tracks). Values the
+	fixture lists in an entry's `held` (Blender holds them over that frame interval: a CONSTANT key
+	or a constraint switch that is not at a cut, which the runtime blends over one sample) are not
+	compared either; they are counted in the summary.
 	Also checks the Blender -> Roblox conventions on real data with Convert (CFrame shim): the camera
 	looks along R(Blender camera -Z) with R(+Y) up (Convert.cameraCF), and the sword's blade
 	(Blender +Z) is the asset's UpVector (Convert.assetCF).
@@ -188,8 +191,12 @@ do
 		table.insert(stale, "character range")
 	end
 	if #stale > 0 then
-		print("FAIL the parity fixture does not belong to src/IntroCutscene/IntroData.luau (" .. table.concat(stale, "; ")
-			.. "). Re-run tools/blender/intro/export_intro.py with a parity path.")
+		local shown = table.concat(stale, "; ", 1, math.min(#stale, 3))
+		if #stale > 3 then
+			shown ..= string.format("; and %d more", #stale - 3)
+		end
+		print("FAIL the parity fixture does not belong to src/IntroCutscene/IntroData.luau (" .. shown
+			.. "). Export both together: tools/blender/intro/export_intro.py with a parity path.")
 		error("stale parity fixture")
 	end
 end
@@ -204,30 +211,43 @@ local function atCut(s, t)
 	return tl:cutBetween(s.t0 + i / s.rate, s.t0 + (i + 1) / s.rate) ~= nil
 end
 
-local skipped = 0
+local skipped, heldSkipped = 0, 0
 local idCF = CFrame.new()
 for _, e in ipairs(fixture.samples) do
 	local t = e.t
 	local where = string.format("%s t=%.4f", e.track, t)
+	-- values Blender holds over this frame interval (CONSTANT keys / constraint switches not at a
+	-- cut; the exporter warns about real jumps): the runtime blends them, so they are not compared
+	local held = {}
+	for _, key in ipairs(e.held or {}) do
+		held[key] = true
+	end
+	local function check(key, kind, err, tol)
+		if held[key] then
+			heldSkipped += 1
+		else
+			measure(kind, err, tol, where)
+		end
+	end
 	if e.track == "character" then
 		local ct = tl:characterTrack()
 		if atCut(ct, t) then
 			skipped += 1
 		else
 			local c = tl:character(t)
-			measure("character pos", dist(c.root.pos, e.pos), TOL.pos, where)
-			measure("character rot", quatAngle(c.root.rot, e.rot), TOL.rot, where)
-			measure("character rootLoc", dist(c.rootLoc, e.rootLoc), TOL.rootLoc, where)
+			check("pos", "character pos", dist(c.root.pos, e.pos), TOL.pos)
+			check("rot", "character rot", quatAngle(c.root.rot, e.rot), TOL.rot)
+			check("rootLoc", "character rootLoc", dist(c.rootLoc, e.rootLoc), TOL.rootLoc)
 			for name, v in pairs(e.channels) do
 				local got = c.channels[name]
 				if got == nil then
 					fail(where .. ": no character channel " .. name)
 				else
-					measure("character ." .. name, math.abs(got - v), TOL.channel, where)
+					check("." .. name, "character ." .. name, math.abs(got - v), TOL.channel)
 				end
 			end
 			for name, q in pairs(e.joints) do
-				measure("joint " .. name, quatAngle(c.joints[name], q), TOL.joint, where)
+				check("joint " .. name, "joint " .. name, quatAngle(c.joints[name], q), TOL.joint)
 			end
 		end
 	else
@@ -239,17 +259,17 @@ for _, e in ipairs(fixture.samples) do
 		else
 			local s = tr:sample(t)
 			local cam = e.track == "Camera"
-			measure(e.track .. " pos", dist(s.pos, e.pos), cam and TOL.camPos or TOL.pos, where)
-			measure(e.track .. " rot", quatAngle(s.rot, e.rot), TOL.rot, where)
+			check("pos", e.track .. " pos", dist(s.pos, e.pos), cam and TOL.camPos or TOL.pos)
+			check("rot", e.track .. " rot", quatAngle(s.rot, e.rot), TOL.rot)
 			if e.scale then
-				measure(e.track .. " scale", math.abs(s.scale - e.scale), TOL.scale, where)
+				check("scale", e.track .. " scale", math.abs(s.scale - e.scale), TOL.scale)
 			end
 			for name, v in pairs(e.channels) do
 				local got = s.channels[name]
 				if got == nil then
 					fail(where .. ": no channel " .. name)
 				else
-					measure(e.track .. " ." .. name, math.abs(got - v), TOL.channel, where)
+					check("." .. name, e.track .. " ." .. name, math.abs(got - v), TOL.channel)
 				end
 			end
 			-- conventions: Blender directions vs the Roblox CFrames Convert builds from the samples
@@ -277,7 +297,16 @@ for _, kind in ipairs(kinds) do
 	local w = worst[kind]
 	print(string.format("%-28s %6d %10.5f %8.3f  %s", kind, counts[kind], w.err, w.tol, w.where))
 end
-print(string.format("%d fixture entries, %d comparisons, %d skipped at cuts, %d failures", #fixture.samples, checks, skipped, failures))
+print(
+	string.format(
+		"%d fixture entries, %d comparisons, %d skipped at cuts, %d held in Blender (not compared), %d failures",
+		#fixture.samples,
+		checks,
+		skipped,
+		heldSkipped,
+		failures
+	)
+)
 if failures > 0 then
 	error(failures .. " parity failures")
 end

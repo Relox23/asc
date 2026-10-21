@@ -8,7 +8,7 @@ API (Blender's python; used by build_intro.py / scene.py)
     import render_preview
     paths = render_preview.render(scene, out_dir, frames=None, times=None, size=(640, 360), samples=8,
                                   mp4=None, impact=True, step=1, glow=True, overlays=True, threads=None,
-                                  core_color=None, keep_passes=False)
+                                  core_color=None, keep_passes=False, shake=True)
         Renders the given frames (frame numbers) or times (seconds, frame = round(t * fps) + frame_start);
         neither = every frame of the scene. Writes <out_dir>/frame_NNNN.png (NNNN = Blender frame) and
         returns their paths in order. Cycles on the CPU, `samples` samples + OpenImageDenoise,
@@ -20,19 +20,27 @@ API (Blender's python; used by build_intro.py / scene.py)
                         speed lines and impact frames are still drawn for every output frame. A cheap
                         full-length animatic: render(scene, d, step=3, mp4=d + "/intro.mp4").
           impact=False  renders impact-frame times like any other frame.
-          overlays=False  no 2D layer at all (raw renders + glow).
+          overlays=False  no 2D layer at all (raw renders + glow, no shake).
+          shake=False   no camera shake (shake:<magnitude>:<s> markers; see below).
           core_color    soul core colour for flash:core (sRGB 0..1); default the scene custom property
                         core_color, else Config.TEST_COLOR (120, 200, 255).
           threads       Cycles CPU threads (None = all).
           keep_passes   keep <out_dir>/raw (beauty renders) and <out_dir>/sil (silhouette masks).
-        Everything it changes on the scene (render settings, frame) is restored.
+        Everything it changes on the scene (render settings, frame, camera) is restored.
+        What it expects from the scene: scene.camera = the Camera; the silhouettes are CharacterRig
+        and Sword with all their children (mannequin parts, sword pieces); the scene's own world and
+        lights are used as they are; markers as in DESIGN §1; optional scene custom property
+        core_color = (r, g, b) sRGB 0..1 for flash:core.
     render_preview.KEY_TIMES     stills at the storyboard beats (DESIGN §1), e.g.
                                  render(scene, d, times=render_preview.KEY_TIMES)
+    render_preview.encode_mp4(paths, mp4, fps=30) -> mp4   h264 / yuv420p / crf 23 with the system ffmpeg
     render_preview.contact_sheet(paths, out_path, cols=4, width=1600, labels=None) -> out_path
         Labelled grid of stills (labels default to "t 12.50 s  f 376" from frame_NNNN names; system
         python3 + Pillow, called through a subprocess when Pillow is missing in Blender's python).
     render_preview.screen_state(markers, t) -> dict   the runtime's 2D state at t (pure python):
         {"bars", "fade", "flash": (rgb, alpha) or None, "impact": "off"|"white"|"black", "speed"}
+    render_preview.shake_offset(markers, t) -> (x, y, roll)   Screen.luau's camera shake at t
+        (camera-local studs right / up, radians about the view axis); markers = [(t, name)].
 
 How the 2D layer is made
 ------------------------
@@ -41,17 +49,22 @@ mirroring Screen.luau: marker state machine and timing curves (smoothstep ramps 
 flash alpha (1 - p)^2), the same pseudo-random hash for the speed lines and the 32 impact lines
 (re-randomised every 1/60 s), thicknesses scaled from 720p. Impact frames (impact:white / impact:black
 until the next impact:* marker): the beauty render is skipped; a silhouette pass renders only
-CharacterRig (+ its mannequin parts) and Sword (+ descendants) with an emission material override and a
-transparent film, in a temporary scene that links those objects (so their animated visibility still
-applies); its alpha becomes black-on-white (or white-on-black) silhouettes under the radial lines.
+CharacterRig (+ its mannequin parts) and Sword (+ descendants) in the scene itself (everything else made
+invisible to camera rays, a white emission material override, transparent film; so animation,
+constraints and visibility evaluate exactly as in the beauty pass); its alpha becomes black-on-white
+(or white-on-black) silhouettes under the radial lines.
 Layer order as in the runtime: impact frame, impact lines, speed lines, flash, bars, fade.
+Camera shake is 3D, like the runtime's (camera.CFrame = track CFrame * ShakeOffset): while a shake
+marker is active the frame is rendered through a temporary camera parented to Camera with the
+camera-local offset of Screen.luau (same decay and frequencies; Perlin noise instead of
+math.noise, so the same character but not the same numbers).
 
 Command line
 ------------
     python tools/blender/intro/render_preview.py [scene.blend=assets/IntroScene.blend] --out DIR
         [--times 0.5,12,28.05 | --frames 16,361 | --key | --all] [--step 3] [--size 640x360]
         [--samples 8] [--threads 2] [--mp4 DIR/intro.mp4] [--sheet DIR/sheet.png] [--no-impact]
-        [--no-glow] [--no-overlays] [--keep-passes]
+        [--no-glow] [--no-overlays] [--no-shake] [--keep-passes]
     python3 tools/blender/intro/render_preview.py --sheet out.png a.png b.png ...   (contact sheet only)
 """
 import json
@@ -164,6 +177,68 @@ def _impact_mode_at(markers, t):
         if parts[0] == "impact":
             mode = parts[1] if len(parts) > 1 and parts[1] in ("white", "black") else "off"
     return mode
+
+
+# Perlin's improved noise (a look-alike of Roblox's math.noise: same character, not the same numbers)
+_PERM = list(range(256))
+__import__("random").Random(1985).shuffle(_PERM)
+_PERM += _PERM
+
+
+def _fade_curve(t):
+    return t * t * t * (t * (t * 6 - 15) + 10)
+
+
+def _grad(h, x, y, z):
+    h &= 15
+    u = x if h < 8 else y
+    v = y if h < 4 else (x if h in (12, 14) else z)
+    return (u if h & 1 == 0 else -u) + (v if h & 2 == 0 else -v)
+
+
+def noise3(x, y, z):
+    """Gradient noise in about [-1, 1], 0 on the integer lattice (like math.noise)."""
+    fx, fy, fz = math.floor(x), math.floor(y), math.floor(z)
+    X, Y, Z = int(fx) & 255, int(fy) & 255, int(fz) & 255
+    x, y, z = x - fx, y - fy, z - fz
+    u, v, w = _fade_curve(x), _fade_curve(y), _fade_curve(z)
+    P = _PERM
+    A, B = P[X] + Y, P[X + 1] + Y
+    AA, AB, BA, BB = P[A] + Z, P[A + 1] + Z, P[B] + Z, P[B + 1] + Z
+
+    def lerp(t, a, b):
+        return a + t * (b - a)
+
+    return lerp(w, lerp(v, lerp(u, _grad(P[AA], x, y, z), _grad(P[BA], x - 1, y, z)),
+                        lerp(u, _grad(P[AB], x, y - 1, z), _grad(P[BB], x - 1, y - 1, z))),
+                lerp(v, lerp(u, _grad(P[AA + 1], x, y, z - 1), _grad(P[BA + 1], x - 1, y, z - 1)),
+                     lerp(u, _grad(P[AB + 1], x, y - 1, z - 1), _grad(P[BB + 1], x - 1, y - 1, z - 1))))
+
+
+def shake_offset(markers, t):
+    """Screen.luau's ShakeOffset at t from the shake:<magnitude>:<seconds> markers: camera-local
+    (x, y, roll) -- studs right / up and radians about the view axis (Blender camera axes are the
+    same: X right, Y up, looking along -Z)."""
+    shakes = []
+    for tm, name in markers:
+        if tm > t + EPS:
+            break
+        parts = name.split(":")
+        if parts[0] != "shake":
+            continue
+        live = [sh for sh in shakes if tm < sh[2] + sh[1]]     # the runtime prunes finished ones
+        mag, dur = _arg(parts[1:], 0, 0.5), max(_arg(parts[1:], 1, 0.5), 1e-3)
+        shakes = live + [(mag, dur, tm, len(live) * 7.31 + tm)]
+    x = y = roll = 0.0
+    for mag, dur, t0, seed in shakes:
+        p = (t - t0) / dur
+        if 0 <= p < 1:
+            k = mag * (1 - p) * (1 - p)
+            tt = (t - t0) * 17
+            x += noise3(tt, seed, 0.5) * 2 * k
+            y += noise3(seed, tt, 1.5) * 2 * k
+            roll += noise3(tt, 2.5, seed) * k * 0.02
+    return x, y, roll
 
 
 def _line(img, cx, cy, ang, mid, length, width, color, alpha_fn, opacity=1.0):
@@ -333,7 +408,7 @@ def contact_sheet(paths, out_path, cols=4, width=1600, labels=None):
         args = [_python3(), os.path.abspath(__file__), "--sheet", out_path, "--cols", str(cols), "--width", str(width)]
         if labels:
             args += ["--labels", json.dumps(labels)]
-        subprocess.run(args + paths, check=True)
+        subprocess.run(args + paths, check=True, stdout=subprocess.DEVNULL)
         return out_path
 
 
@@ -421,26 +496,49 @@ def _silhouette_objects(scene):
     return objs
 
 
-class _Silhouettes:
-    """A temporary scene linking CharacterRig + Sword (and the camera) with an emission override."""
+class _ShakeCamera:
+    """A temporary camera parented to the scene camera (sharing its data, so lens keys apply) that
+    carries the camera-local shake offset; it is the render camera while a shake is active."""
 
-    def __init__(self, scene, size, threads):
+    def __init__(self, scene):
         import bpy
-        self.src = scene
-        self.scene = bpy.data.scenes.new("PreviewSilhouettes")
-        sc = self.scene
-        sc.render.fps, sc.render.fps_base = scene.render.fps, scene.render.fps_base
-        sc.frame_start, sc.frame_end = scene.frame_start, scene.frame_end
-        self.coll = bpy.data.collections.new("PreviewSilhouettes")
-        sc.collection.children.link(self.coll)
-        cam = scene.camera
-        if cam is not None:
-            self.coll.objects.link(cam)
-            sc.camera = cam
-        self.objects = _silhouette_objects(scene)
-        for o in self.objects:
-            if o.name not in self.coll.objects:
-                self.coll.objects.link(o)
+        from mathutils import Matrix
+        self.scene = scene
+        self.src = scene.camera
+        self.obj = bpy.data.objects.new("PreviewShakeCamera", self.src.data)
+        scene.collection.objects.link(self.obj)
+        self.obj.parent = self.src
+        self.obj.matrix_parent_inverse = Matrix()
+
+    def apply(self, scene, offset):
+        x, y, roll = offset
+        self.obj.location = (x, y, 0.0)
+        self.obj.rotation_euler = (0.0, 0.0, roll)
+        scene.camera = self.obj if (x or y or roll) else self.src
+
+    def close(self):
+        import bpy
+        self.scene.camera = self.src
+        bpy.data.objects.remove(self.obj)
+
+
+class _Silhouettes:
+    """The silhouette pass, in the scene itself (so constraints, parents and drivers evaluate exactly
+    as in the beauty pass): every object except CharacterRig + Sword and their children is made
+    invisible to camera rays (instancers hide their instances too), the view layer gets a white
+    emission material override, no world, transparent film, no bounces. Everything is put back by
+    close()."""
+
+    def __init__(self, scene, size, threads, shaker=None):
+        import bpy
+        self.scene = scene
+        self.shaker = shaker
+        keep = set(_silhouette_objects(scene))
+        self.vis = {}
+        for o in scene.objects:
+            if o not in keep and o.type != "CAMERA":
+                self.vis[o.name] = o.visible_camera
+                o.visible_camera = False
         self.mat = bpy.data.materials.new("PreviewSilhouette")
         nt = self.mat.node_tree
         for n in list(nt.nodes):
@@ -449,20 +547,38 @@ class _Silhouettes:
         em.inputs["Color"].default_value = (1, 1, 1, 1)
         out = nt.nodes.new("ShaderNodeOutputMaterial")
         nt.links.new(em.outputs[0], out.inputs[0])
-        sc.view_layers[0].material_override = self.mat
-        sc.world = None
-        _configure(sc, size, 4, threads, transparent=True, denoise=False)
-        sc.cycles.max_bounces = 0
-        sc.cycles.transparent_max_bounces = 8
+        vl = bpy.context.view_layer if scene == bpy.context.scene else scene.view_layers[0]
+        self.view_layer = vl
+        c = scene.cycles
+        self.saved = {"override": vl.material_override, "world": scene.world,
+                      "bounces": (c.max_bounces, c.transparent_max_bounces),
+                      "film": scene.render.film_transparent, "mode": scene.render.image_settings.color_mode,
+                      "cycles": (c.samples, c.use_denoising)}
+        vl.material_override = self.mat
+        scene.world = None
+        _configure(scene, size, 16, threads, transparent=True, denoise=False)
+        c.max_bounces = 0
+        c.transparent_max_bounces = 8
 
-    def render(self, frame, path):
+    def render(self, frame, path, offset=None):
         self.scene.frame_set(frame)
+        if self.shaker is not None:
+            self.shaker.apply(self.scene, offset or (0.0, 0.0, 0.0))
         _render_still(self.scene, path)
 
     def close(self):
         import bpy
-        bpy.data.scenes.remove(self.scene)
-        bpy.data.collections.remove(self.coll)
+        sc, s = self.scene, self.saved
+        for name, v in self.vis.items():
+            o = sc.objects.get(name)
+            if o is not None:
+                o.visible_camera = v
+        self.view_layer.material_override = s["override"]
+        sc.world = s["world"]
+        sc.cycles.max_bounces, sc.cycles.transparent_max_bounces = s["bounces"]
+        sc.render.film_transparent = s["film"]
+        sc.render.image_settings.color_mode = s["mode"]
+        sc.cycles.samples, sc.cycles.use_denoising = s["cycles"]
         bpy.data.materials.remove(self.mat)
 
 
@@ -474,7 +590,7 @@ def _scene_markers(scene):
 
 def render(scene=None, out_dir="preview", frames=None, times=None, size=(640, 360), samples=8, mp4=None,
            impact=True, step=1, glow=True, overlays=True, threads=None, core_color=None, keep_passes=False,
-           verbose=True):
+           shake=True, verbose=True):
     """Render the animatic frames. See the module docstring."""
     import time
     import bpy
@@ -516,12 +632,16 @@ def render(scene=None, out_dir="preview", frames=None, times=None, size=(640, 36
 
     saved = _save_settings(scene)
     t_start = time.time()
-    sil = None
+    sil = shaker = None
     try:
         _configure(scene, size, samples, threads)
+        if shake and overlays and scene.camera is not None and any(n.startswith("shake:") for _t, n in markers):
+            shaker = _ShakeCamera(scene)
         for k, f in enumerate(beauty):
             t0 = time.time()
             scene.frame_set(f)
+            if shaker is not None:
+                shaker.apply(scene, shake_offset(markers, t_of(f)))
             p = os.path.join(raw_dir, "frame_%04d.png" % f)
             _render_still(scene, p)
             if glow:
@@ -530,14 +650,16 @@ def render(scene=None, out_dir="preview", frames=None, times=None, size=(640, 36
                 print("render_preview: frame %d (t %.2f) %d/%d  %.1f s" % (f, t_of(f), k + 1, len(beauty), time.time() - t0))
         if sil_frames:
             os.makedirs(sil_dir, exist_ok=True)
-            sil = _Silhouettes(scene, size, threads)
+            sil = _Silhouettes(scene, size, threads, shaker)
             for f in sil_frames:
-                sil.render(f, os.path.join(sil_dir, "frame_%04d.png" % f))
+                sil.render(f, os.path.join(sil_dir, "frame_%04d.png" % f), shake_offset(markers, t_of(f)))
             if verbose:
                 print("render_preview: %d impact frames (silhouette pass)" % len(sil_frames))
     finally:
         if sil is not None:
             sil.close()
+        if shaker is not None:
+            shaker.close()
         _restore_settings(scene, saved)
 
     # 2D layer -------------------------------------------------------------------------------------
@@ -622,6 +744,7 @@ def _main(argv):
     ap.add_argument("--no-glow", action="store_true")
     ap.add_argument("--no-overlays", action="store_true")
     ap.add_argument("--keep-passes", action="store_true")
+    ap.add_argument("--no-shake", action="store_true")
     a = ap.parse_args(argv)
     import bpy
     bpy.ops.wm.open_mainfile(filepath=a.blend)
@@ -634,7 +757,7 @@ def _main(argv):
     w, h = (int(x) for x in a.size.lower().split("x"))
     outs = render(bpy.context.scene, a.out, frames=frames, times=times, size=(w, h), samples=a.samples, mp4=a.mp4,
                   impact=not a.no_impact, step=a.step, glow=not a.no_glow, overlays=not a.no_overlays,
-                  threads=a.threads, keep_passes=a.keep_passes)
+                  threads=a.threads, keep_passes=a.keep_passes, shake=not a.no_shake)
     if a.sheet:
         print(contact_sheet(outs, a.sheet, cols=a.cols))
 

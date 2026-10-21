@@ -44,21 +44,36 @@ What the exporter reads from the scene (the contract for scene.py)
       stay in, visible = 0 there). A track that is never visible is skipped. Without a visible
       channel the track covers its stage's time: space = up to stageSwitch, world = from
       stageSwitch, camera = everything (each with the margin sample).
-    - stage: custom property "stage" ("space" | "world" | "camera") or the TRACKS default;
-      export_track objects without it get space / world / camera from the time they cover
-      (camera = spans the stage switch: the runtime picks the origin by time, ctx.origin).
+    - stage: custom property "stage" ("space" | "world" | "camera") or the TRACKS default:
+      Camera and SoulCore "camera" (both stages: Blender coordinates of the space stage before
+      stageSwitch, of the world stage from it; the runtime picks the origin by time, ctx.origin),
+      Planet / Rift / Starfield "space", SkyRift / Sword / Shockwave / Blast / SlashArc "world".
+      export_track objects without it get space / world / camera from the time they cover.
     - rate: `rate` samples per second (must divide the scene fps); the custom property
       export_rate overrides it per object. If the file is bigger than budget_kb, the slow tracks
       SLOW_TRACKS drop to rate / 2 (each track writes its own rate). Low-rate tracks align their
       sample grid to a cut inside their range when they can.
 * Character: the armature object CharacterRig (rig.py; its world matrix is the HumanoidRootPart).
   Sampled every frame (rate = fps) from the first frame its custom property visible is >= 0.5
-  (minus one margin frame) to frame_end: root = world location + quaternion, joints = rig.joint_transforms() (the
-  Motor6D Transforms, joint space, hemisphere-continuous per joint), rootLoc = the Root bone's
-  location, channels visible and form (custom properties of CharacterRig; 1 when missing).
+  (minus one margin frame; no visible property: from the stage switch) to frame_end: root = world
+  location + quaternion, joints = rig.joint_transforms() (the Motor6D Transforms = the pose bones'
+  keyed rotations, joint space, hemisphere-continuous per joint; if any pose bone has a constraint,
+  e.g. IK, they are recovered from the final pose matrices instead so the constraint is baked),
+  rootLoc = the Root bone's location, channels visible and form (custom properties of
+  CharacterRig; 1 when missing).
+* Discontinuities: the runtime interpolates between samples except across a cut, so a teleport
+  between two frames (CONSTANT keys, a constraint switching on) without a cut marker is blended
+  over one sample. The exporter warns about transform jumps of tracks and of the character root
+  that are not at a cut while visible (> 0.75 studs or > 20 deg in one frame and 6x the
+  neighbouring frames). Small ones (grabbing the sword: the Child Of grip switching on) are fine.
 * Markers: scene.timeline_markers sorted by frame (ties keep their creation order), names as in
-  DESIGN §1. cuts = every "cut" marker, stageSwitch = the "stage:world" marker, world.windStart =
-  the first "wind:*" marker.
+  DESIGN §1. cuts = every "cut" marker, stageSwitch = the "stage:world" marker (put a cut marker
+  on the same frame: Camera and SoulCore jump from space to world coordinates there),
+  world.windStart = the first "wind:*" marker.
+* Cuts: a cut marker on frame c means: for t < t(c) the runtime shows the old shot (holding
+  frame c - 1's sample through the last interval), from t(c) the new one; nothing is blended
+  across it. So key the old shot up to frame c - 1 (CONSTANT on that key keeps Blender's
+  sub-frames the same) and the new shot from frame c.
 * Scene custom properties: space_seed (int, the seed scene.py passed to space.generate, default
   7) -> starfield = space.generate(space_seed); landing_height (float, Blender z of the ground at
   the landing point, default 0) -> world.landingHeight.
@@ -72,9 +87,11 @@ Parity fixture (tools/tests/intro_parity.luau, a Luau module returning a table):
 sub-frame times (never in the frame interval just before a cut, where the runtime holds the
 pre-cut sample on purpose) the Blender-evaluated pos / quaternion / scale / channels of the
 tracks PARITY_TRACKS, the character root + rootLoc + channels + PARITY_JOINTS, and for the
-convention checks the camera's look/up and the sword's blade direction (world). It also records
-the shape of the IntroData it belongs to (duration, track t0/n) so the test detects a stale pair.
-Test: luau tools/tests/intro_parity_test.luau
+convention checks the camera's look/up and the sword's blade direction (world). Each entry lists
+in `held` the values Blender holds over that frame interval (bit-identical to frame f, different
+at f + 1: a CONSTANT key or a constraint switch), which the runtime blends, so the test skips them.
+It also records the shape of the IntroData it belongs to (duration, track t0/n) so the test
+detects a stale pair.  Test: luau tools/tests/intro_parity_test.luau
 """
 import math
 import os
@@ -88,7 +105,7 @@ for _p in (_HERE, os.path.dirname(_HERE)):
         sys.path.insert(0, _p)
 
 import bpy  # noqa: E402
-from mathutils import Matrix, Quaternion, Vector  # noqa: E402
+from mathutils import Vector  # noqa: E402
 
 import rig as _rig  # noqa: E402
 import space  # noqa: E402
@@ -170,6 +187,30 @@ def _decompose(M):
     return loc, q, s
 
 
+def _has_bone_constraints(rig):
+    return any(not c.mute and c.influence > 0 for pb in rig.pose.bones for c in pb.constraints)
+
+
+def joint_transforms(ev, constrained=False):
+    """{bone: (Quaternion, location)} Motor6D Transforms (joint space, DESIGN §4.2) of an evaluated
+    rig. Normally rig.joint_transforms (the pose bones' matrix_basis = the keyed values). With
+    constrained=True (the rig has bone constraints, e.g. IK) they are recovered from the final pose
+    matrices instead, constraints included: basis = rest^-1 * parent_rest * parent_pose^-1 * pose."""
+    if not constrained:
+        return _rig.joint_transforms(ev)
+    out = {}
+    for b in _rig.BONES:
+        pb = ev.pose.bones[b]
+        bone = pb.bone
+        if bone.parent is not None:
+            ppb = ev.pose.bones[bone.parent.name]
+            basis = bone.matrix_local.inverted() @ bone.parent.matrix_local @ ppb.matrix.inverted() @ pb.matrix
+        else:
+            basis = bone.matrix_local.inverted() @ pb.matrix
+        out[b] = (basis.to_3x3().normalized().to_quaternion(), basis.translation.copy())
+    return out
+
+
 def _continuous(quats):
     """Hemisphere-continuous copy of a list of Quaternions."""
     out = []
@@ -190,6 +231,7 @@ class _Sampler:
         self.objects = objects          # {track name: object}
         self.channels = channels        # {track name: [channel names]}
         self.character = character      # armature object or None
+        self.constrained = character is not None and _has_bone_constraints(character)
         self.cache = {}
         self.evals = 0
 
@@ -220,7 +262,7 @@ class _Sampler:
             snap[name] = (ev.matrix_world.copy(), ch)
         if self.character is not None:
             ev = self.character.evaluated_get(dg)
-            jt = _rig.joint_transforms(ev)
+            jt = joint_transforms(ev, self.constrained)
             ch = {}
             for c in CHARACTER_CHANNELS:
                 v = ev.get(c, self.character.get(c, 1.0))
@@ -230,6 +272,44 @@ class _Sampler:
         if key is not None:
             self.cache[key] = snap
         return snap
+
+
+def _qangle(a, b):
+    """Rotation angle in degrees between two unit quaternions (sign-agnostic; atan2 form, accurate
+    for tiny angles where 2 acos(|dot|) is all rounding noise)."""
+    if a.dot(b) < 0:
+        b = -b
+    return math.degrees(4 * math.atan2((a - b).magnitude, (a + b).magnitude))
+
+
+JUMP_POS, JUMP_ROT = 0.75, 20.0     # studs / degrees in one frame, and 6x the neighbouring frames
+
+
+def _jumps(frames, mats, cut_frames, visible=None):
+    """Frames f (of consecutive `frames`) where the transform jumps between f and f + 1 without a
+    cut (a cut marker at f + 1): the runtime would blend such a teleport over one sample. Ignored
+    while the object is hidden at f (it shows the step value of f)."""
+    locs, quats = [], []
+    for M in mats:
+        loc, q, _s = _decompose(M)
+        locs.append(loc)
+        quats.append(q)
+    d = [(locs[i + 1] - locs[i]).length for i in range(len(frames) - 1)]
+    a = [_qangle(quats[i], quats[i + 1]) for i in range(len(frames) - 1)]
+
+    def big(v, i, lo, floor):
+        near = [v[j] for j in (i - 1, i + 1) if 0 <= j < len(v)]
+        return v[i] > lo and v[i] > 6 * max(near + [floor])
+
+    cuts = set(cut_frames)
+    out = []
+    for i in range(len(frames) - 1):
+        f = frames[i]
+        if f + 1 in cuts or (visible is not None and visible[i] < 0.5):
+            continue
+        if big(d, i, JUMP_POS, 0.02) or big(a, i, JUMP_ROT, 0.5):
+            out.append(f)
+    return out
 
 
 def _markers(scene, fps):
@@ -257,6 +337,12 @@ def _grid(lo, hi, step, align_frames, start):
     while frames[-1] < hi:
         frames.append(frames[-1] + step)
     return frames
+
+
+def _warn_jumps(warnings, name, jumps, fs, fps):
+    where = ", ".join("t %.3f-%.3f (frames %d-%d)" % ((f - fs) / fps, (f + 1 - fs) / fps, f, f + 1) for f in jumps[:4])
+    _warn(warnings, "%s jumps without a cut marker at %s%s: the runtime blends a jump over one sample; "
+          "make the motion continuous or add a cut" % (name, where, " and %d more" % (len(jumps) - 4) if len(jumps) > 4 else ""))
 
 
 def bake(scene, rate=30, rates=None, verbose=True, _state=None):
@@ -355,6 +441,11 @@ def bake(scene, rate=30, rates=None, verbose=True, _state=None):
                 stage = "space" if vis[-1] < switch[1] else ("world" if vis[0] >= switch[1] else "camera")
         if not has_vis:
             lo, hi = stage_range(stage, step)
+        every = list(range(lo, hi + 1))
+        jumps = _jumps(every, [sampler.snapshot(f)[name][0] for f in every], cut_frames,
+                       [sampler.snapshot(f)[name][1]["visible"] for f in every] if has_vis else None)
+        if jumps:
+            _warn_jumps(warnings, name, jumps, fs, fps)
         frames = _grid(lo, hi, step, cut_frames, fs)
         mats, quats, chans = [], [], {c: [] for c in channels[name]}
         for f in frames:
@@ -385,17 +476,25 @@ def bake(scene, rate=30, rates=None, verbose=True, _state=None):
     # character ------------------------------------------------------------------------------------
     char = None
     if character is not None:
-        vis = [f for f in range(fs, fe + 1) if sampler.snapshot(f)[CHARACTER][3]["visible"] >= 0.5]
-        if not vis:
-            _warn(warnings, "%s is never visible: exporting the world stage range" % CHARACTER)
-            lo = switch[1] if switch else fs
-        else:
-            lo = max(fs, vis[0] - 1)
         for c in CHARACTER_CHANNELS:
             if c not in character.keys():
                 _warn(warnings, "%s has no custom property %s (exported as 1)" % (CHARACTER, c))
+        vis = [f for f in range(fs, fe + 1) if sampler.snapshot(f)[CHARACTER][3]["visible"] >= 0.5]
+        if "visible" not in character.keys() or not vis:
+            if vis:
+                _warn(warnings, "%s has no visible property: exporting the world stage range" % CHARACTER)
+            else:
+                _warn(warnings, "%s is never visible: exporting the world stage range" % CHARACTER)
+            lo = max(fs, switch[1] - 1) if switch else fs
+        else:
+            lo = max(fs, vis[0] - 1)
+        if sampler.constrained and verbose:
+            print("export_intro: %s has bone constraints: joints taken from the final pose matrices" % CHARACTER)
         frames = list(range(lo, fe + 1))
         snaps = [sampler.snapshot(f)[CHARACTER] for f in frames]
+        jumps = _jumps(frames, [sn[0] for sn in snaps], cut_frames, [sn[3]["visible"] for sn in snaps])
+        if jumps:
+            _warn_jumps(warnings, CHARACTER, jumps, fs, fps)
         root_pos, root_q = [], []
         for M, _j, _l, _c in snaps:
             loc, q, _s = _decompose(M)
@@ -597,16 +696,46 @@ def _fixture_times(data, n, seed):
     return out
 
 
+def _is_step(name):
+    return name in ("visible", "held") or name.startswith("is")
+
+
+def _held(cur, a, b, channels=None, joints=None):
+    """Which values Blender holds over the frame interval of a sub-frame sample (CONSTANT keys,
+    constraint switches): equal to frame f's value but different at f + 1. The runtime blends
+    those (unless a cut is there), so the parity test skips them. cur/a/b = (matrix, extra...)."""
+    out = []
+    if b is None:
+        return out
+    (lc, qc, sc), (la, qa, sa), (lb, qb, sb) = (_decompose(x[0]) for x in (cur, a, b))
+    # held values come out bit-identical to frame f's; anything moving differs by far more
+    if (lc - la).length < 1e-6 and (lb - la).length > 1e-4:
+        out.append("pos")
+    if _qangle(qc, qa) < 1e-6 and _qangle(qb, qa) > 1e-3:
+        out.append("rot")
+    if (sc - sa).length < 1e-7 and (sb - sa).length > 1e-5:
+        out.append("scale")
+    for name, (vc, va, vb) in (channels or {}).items():
+        if not _is_step(name) and abs(vc - va) < 1e-9 and abs(vb - va) > 1e-6:
+            out.append("." + name)
+    for name, (vc, va, vb) in (joints or {}).items():
+        if _qangle(vc, va) < 1e-6 and _qangle(vb, va) > 1e-3:
+            out.append("joint " + name)
+    return out
+
+
 def _parity(scene, data, info, n, seed):
     sampler = info["sampler"]
     fps = data["fps"]
+    fe = scene.frame_end
     entries = []
-    blade = None
     for t in _fixture_times(data, n, seed):
         fl = t * fps + scene.frame_start
         frame = int(math.floor(fl))
         sub = fl - frame
         snap = sampler.snapshot(frame, sub)
+        sa = sampler.snapshot(frame)
+        sb = sampler.snapshot(frame + 1) if frame + 1 <= fe else None
         for name in PARITY_TRACKS:
             d = data["tracks"].get(name)
             if d is None or not (d["t0"] - 1e-9 <= t <= d["t0"] + (d["n"] - 1) / d["rate"] + 1e-9):
@@ -621,14 +750,25 @@ def _parity(scene, data, info, n, seed):
                 e["up"] = tuple(R @ Vector((0, 1, 0)))
             elif name == "Sword":
                 e["blade"] = tuple(R @ Vector((0, 0, 1)))
+            e["held"] = _held(snap[name], sa[name], sb[name] if sb else None,
+                              {c: (ch[c], sa[name][1][c], sb[name][1][c]) for c in ch} if sb else None)
             entries.append(e)
         c = data.get("character")
         if c and CHARACTER in snap and c["t0"] - 1e-9 <= t <= c["t0"] + (c["n"] - 1) / c["rate"] + 1e-9:
             M, joints, loc_root, ch = snap[CHARACTER]
             loc, q, _s = _decompose(M)
-            entries.append({"t": t, "track": "character", "pos": tuple(loc), "rot": (q.w, q.x, q.y, q.z),
-                            "rootLoc": tuple(loc_root), "channels": dict(ch),
-                            "joints": {b: tuple(joints[b].normalized()) for b in PARITY_JOINTS}})
+            e = {"t": t, "track": "character", "pos": tuple(loc), "rot": (q.w, q.x, q.y, q.z),
+                 "rootLoc": tuple(loc_root), "channels": dict(ch),
+                 "joints": {b: tuple(joints[b].normalized()) for b in PARITY_JOINTS}}
+            held = []
+            if sb is not None:
+                A, B = sa[CHARACTER], sb[CHARACTER]
+                held = _held(snap[CHARACTER], A, B, {k: (ch[k], A[3][k], B[3][k]) for k in ch},
+                             {b: (joints[b], A[1][b], B[1][b]) for b in PARITY_JOINTS})
+                if (loc_root - A[2]).length < 1e-7 and (B[2] - A[2]).length > 1e-5:
+                    held.append("rootLoc")
+            e["held"] = held
+            entries.append(e)
     return entries
 
 
@@ -636,7 +776,8 @@ def _parity_luau(data, entries, source=""):
     def v(vals):
         return "{" + ", ".join("%.7g" % x for x in vals) + "}"
 
-    L = ["-- Parity fixture: GENERATED by tools/blender/intro/export_intro.py%s." % ((" from " + source) if source else ""),
+    L = ["--!nocheck",   # hundreds of record tables: too much for luau-analyze's type inference
+         "-- Parity fixture: GENERATED by tools/blender/intro/export_intro.py%s." % ((" from " + source) if source else ""),
          "-- Blender-evaluated values at random sub-frame times, checked against Timeline sampling of",
          "-- src/IntroCutscene/IntroData.luau by tools/tests/intro_parity_test.luau (DESIGN §9).",
          "return {",
@@ -662,6 +803,8 @@ def _parity_luau(data, entries, source=""):
         parts.append("channels = {" + ", ".join("%s = %.7g" % (_key(k), x) for k, x in sorted(e["channels"].items())) + "}")
         if "joints" in e:
             parts.append("joints = {" + ", ".join("%s = %s" % (b, v(q)) for b, q in e["joints"].items()) + "}")
+        if e.get("held"):
+            parts.append("held = {" + ", ".join(_str(h) for h in e["held"]) + "}")
         L.append("\t\t{ " + ", ".join(parts) + " },")
     L.append("\t},")
     L.append("}")

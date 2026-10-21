@@ -11,7 +11,7 @@
 	                nebula  a = smoothstep(clamp((nebula - appear) / 0.35))
 	              Stars are opaque Neon balls whose colour is scaled by b (cheap: no transparency
 	              sorting for 1600 parts); galaxy points are translucent Neon balls (transparency by u).
-	  SoulCore    the asset + halo + PointLight (glow / pulse) + comet tail (tail channel: three Beams
+	  SoulCore    the asset + soft glow sprite + PointLight (glow / pulse) + comet tail (tail channel: three Beams
 	              trailing along -velocity, a Trail and a sparkle emitter, all in the soul colour)
 	  Planet      ShatteredPlanet on its track
 	  Rift        cracks revealed in order with flicker and small flashes (crack), shards flung outward
@@ -37,9 +37,15 @@ local TWINKLE_DEPTH = 0.45
 local TWINKLE_SPEED = 2.2
 -- stars smaller than this (studs at ~900 away, ~1 px at 1080p) would shimmer in and out of
 -- existence between pixels; the size field stays the diameter otherwise
+-- (a smaller star is drawn at STAR_MIN_D and dimmed by size / STAR_MIN_D: the same light)
 local STAR_MIN_D = 1.2
+local STAR_WRITE_STEP = 0.02 -- a star's colour is rewritten when its brightness moved this much
 local GALAXY_POINT_TRANSPARENCY = 0.4 -- galaxy points at full brightness (overlaps read as glow)
 local GALAXY_HAZE_TRANSPARENCY = 0.78 -- the dim, big puffs between the arms
+-- nebula puffs: particles bigger than this are not safe to rely on, so big clouds get more puffs
+local PUFF_MAX = 100
+local NEBULA_HAZE_ALPHA = 0.2
+local NEBULA_CORE_ALPHA = 0.24
 
 -- built-in particle textures (content/textures/particles of the Roblox client)
 local TEX_SMOKE = "rbxasset://textures/particles/smoke_main.dds"
@@ -173,6 +179,80 @@ local function setLight(l, brightness, range)
 end
 util.setLight = setLight
 
+--[[ A soft round glow in world space without image assets: a BillboardGui (camera-facing, depth
+	tested, LightInfluence 0) of concentric circles whose stacked translucency falls off radially.
+	glowSprite(parent part, name, color) -> sprite; setGlow(sprite, diameter, alpha at the centre,
+	color?, brightness?) (alpha <= 0 hides it). ]]
+local GLOW_RINGS = 10
+local function glowSprite(parent, name, color)
+	local gui = Instance.new("BillboardGui")
+	gui.Name = name
+	gui.LightInfluence = 0
+	gui.AlwaysOnTop = false
+	gui.ResetOnSpawn = false
+	gui.Size = UDim2.fromScale(4, 4)
+	gui.Enabled = false
+	local rings = {}
+	for k = 1, GLOW_RINGS do
+		local f = Instance.new("Frame")
+		local frac = k / GLOW_RINGS
+		f.Name = "Ring" .. k
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Position = UDim2.fromScale(0.5, 0.5)
+		f.Size = UDim2.fromScale(frac, frac)
+		f.BorderSizePixel = 0
+		f.BackgroundColor3 = color
+		f.BackgroundTransparency = 1
+		f.ZIndex = GLOW_RINGS + 1 - k
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0.5, 0)
+		corner.Parent = f
+		f.Parent = gui
+		rings[k] = f
+	end
+	gui.Parent = parent
+	-- ring k's share of the centre alpha: the outer rings much fainter, so the edge fades out
+	local weights, sum = {}, 0
+	for k = 1, GLOW_RINGS do
+		weights[k] = (1 - (k - 1) / GLOW_RINGS) ^ 2
+		sum += weights[k]
+	end
+	return { gui = gui, rings = rings, weights = weights, weightSum = sum, alpha = -1, color = color, size = -1 }
+end
+util.glowSprite = glowSprite
+
+local function setGlow(g, diameter, alpha, color, brightness)
+	local on = alpha > 0.004 and diameter > 0.01
+	if g.gui.Enabled ~= on then
+		g.gui.Enabled = on
+	end
+	if not on then
+		return
+	end
+	if math.abs(diameter - g.size) > 0.01 then
+		g.size = diameter
+		g.gui.Size = UDim2.fromScale(diameter, diameter)
+	end
+	if brightness then
+		g.gui.Brightness = brightness
+	end
+	color = color or g.color
+	local recolor = color ~= g.color
+	g.color = color
+	if math.abs(alpha - g.alpha) > 0.004 or recolor then
+		g.alpha = alpha
+		-- every ring covers the centre, so their alphas stack up to ~alpha there
+		local a0 = math.clamp(alpha, 0, 0.95) / g.weightSum
+		for k, f in ipairs(g.rings) do
+			f.BackgroundTransparency = 1 - math.min(a0 * g.weights[k] * 1.15, 0.9)
+			if recolor then
+				f.BackgroundColor3 = color
+			end
+		end
+	end
+end
+util.setGlow = setGlow
+
 local function setParent(inst, parent)
 	if inst.Parent ~= parent then
 		inst.Parent = parent
@@ -205,11 +285,11 @@ SpaceStage.Core = Core
 
 local TAIL_LENGTH = 18 -- studs at tail = 1 (core diameter ~3)
 -- comet tail beams: { length factor, width at the core, width at the end, transparency at the core,
--- whiteness at the core }
+-- whiteness at the core, textured (soft cloudy band scrolling backward) }
 local TAIL_BEAMS = {
-	{ 1.0, 2.3, 0.15, 0.3, 0.35 },
-	{ 0.7, 4.8, 0.7, 0.72, 0 },
-	{ 0.42, 0.9, 0.05, 0.0, 0.8 },
+	{ 1.0, 1.3, 0.1, 0.55, 0.3, false },
+	{ 0.75, 2.8, 0.6, 0.0, 0.0, true },
+	{ 0.45, 0.45, 0.03, 0.15, 0.85, false },
 }
 
 function Core.new(parent, assets, color, name)
@@ -224,14 +304,12 @@ function Core.new(parent, assets, color, name)
 	self.mover = assets.mover(model)
 	self.glowParts = assets.pieces(model, "CoreGlow")
 	self.ringParts = assets.pieces(model, "CoreRing")
-	self.halo = assets.part(folder, "SoulCore__Halo", "CoreGlow", Vector3.new(4, 4, 4), CFrame.new(), Enum.PartType.Ball)
-	self.halo.Color = color
-	self.halo.Transparency = 1
 
 	local fx = invisiblePart(folder, "SoulCore__FX")
 	self.fx = fx
 	self.light = light(fx, color, 20)
-	local head = attachment(fx, "Head")
+	self.glow = glowSprite(fx, "Glow", color)
+	local head = attachment(fx, "Head", Vector3.new(0, 0, -0.6)) -- just behind the orb's centre
 	self.tailEnds = {}
 	self.beams = {}
 	for k, spec in ipairs(TAIL_BEAMS) do
@@ -248,6 +326,12 @@ function Core.new(parent, assets, color, name)
 		b.Width1 = spec[3]
 		b.Color = ColorSequence.new(color:Lerp(WHITE, spec[5]), color)
 		b.Transparency = NumberSequence.new({ NSK(0, spec[4]), NSK(0.45, spec[4] + (1 - spec[4]) * 0.5), NSK(1, 1) })
+		if spec[6] then
+			b.Texture = TEX_SMOKE
+			b.TextureMode = Enum.TextureMode.Wrap
+			b.TextureLength = 5
+			b.TextureSpeed = 1.6
+		end
 		b.Enabled = false
 		b.Parent = fx
 		self.tailEnds[k] = tip
@@ -325,15 +409,13 @@ function Core:Update(cf, scale, ch, vel)
 		for _, p in ipairs(self.ringParts) do
 			p.Color = ring
 		end
-		local halo = self.halo
-		local alpha = math.clamp(0.06 * glow + 0.14 * pulse, 0, 0.36)
-		halo.Transparency = alpha > 0.005 and 1 - alpha or 1
-		local d = (2.9 + 1.1 * math.min(glow, 3)) * (1 + 0.35 * pulse) * scale
-		halo.Size = Vector3.new(d, d, d)
+		-- soft glow around the orb: grows with glow, beats with pulse
+		local d = (3 + 1.6 * math.min(glow, 3)) * (1 + 0.25 * pulse) * scale
+		local alpha = math.clamp(0.1 * glow + 0.15 * pulse, 0, 0.45)
+		setGlow(self.glow, d, alpha, self.color:Lerp(WHITE, 0.2 + 0.2 * pulse), 1 + 0.35 * math.min(glow, 3))
 		setLight(self.light, 0.8 * glow + 1.6 * pulse, (9 + 7 * math.min(glow, 3)) * scale)
 	end
 	local pos = cf.Position
-	self.halo.CFrame = cf
 	if vel and vel.Magnitude > 0.5 then
 		self.dir = -vel.Unit
 	end
@@ -403,6 +485,7 @@ function Rift.new(parent, assets, name, opts)
 		self.base[i] = { cf = p.CFrame, size = p.Size, tr = p:GetAttribute("BaseTransparency") or p.Transparency }
 		self.cframes[i] = p.CFrame
 		self.lastS[i] = 1
+		self.lastT[i] = -1
 	end
 	local function indices(style)
 		local list = {}
@@ -498,10 +581,6 @@ end
 function Rift:Update(cf, scale, crack, open, t)
 	local S = math.max(scale or 1, 0.01)
 	local parts, base, cframes, lastS = self.parts, self.base, self.cframes, self.lastS
-	local lastT = self.lastT
-	for i in ipairs(parts) do
-		lastT[i] = lastT[i] or -1
-	end
 	local nCracks = #self.cracks
 	local frame = math.floor(t * 30)
 	local openE = 1 - (1 - open) ^ 2.2 -- ease out: shards fly fast, then drift
@@ -594,6 +673,9 @@ local function buildSky(model, assets, starfield)
 	end
 	local dome = assets.place("SpaceDome", model, Convert.ASSET_TURN)
 	for _, p in ipairs(assets.pieces(dome)) do
+		-- black Neon: unlit, so the low sun can't put a specular glint on the inside of the dome
+		p.Material = Enum.Material.Neon
+		p.Color = Color3.new(0, 0, 0)
 		add(p, p.CFrame)
 	end
 
@@ -617,7 +699,8 @@ local function buildSky(model, assets, starfield)
 	starFolder.Parent = model
 	for k = 0, #stars // 9 - 1 do
 		local o = k * 9
-		local d = math.max(stars[o + 4], STAR_MIN_D)
+		local size = stars[o + 4]
+		local d = math.max(size, STAR_MIN_D)
 		local p = tpl:Clone()
 		p.Name = "Star"
 		p.Size = Vector3.new(d, d, d)
@@ -625,9 +708,10 @@ local function buildSky(model, assets, starfield)
 		p.CFrame = offset
 		p.Parent = starFolder
 		add(p, offset)
+		local dim = math.clamp(size / STAR_MIN_D, 0.4, 1)
 		table.insert(sky.stars, {
 			part = p,
-			color = Color3.new(stars[o + 5], stars[o + 6], stars[o + 7]),
+			color = Color3.new(stars[o + 5] * dim, stars[o + 6] * dim, stars[o + 7] * dim),
 			appear = stars[o + 8],
 			phase = stars[o + 9],
 			b = -1,
@@ -687,20 +771,23 @@ local function buildSky(model, assets, starfield)
 		local r = nb.radius or 150
 		local col = nb.color or { 0.5, 0.3, 0.9 }
 		local color = Color3.new(col[1], col[2], col[3])
-		local anchor = Instance.new("Part")
-		anchor.Name = "Nebula_" .. ni
-		anchor.Shape = Enum.PartType.Ball
-		anchor.Anchored = true
-		anchor.CanCollide = false
-		anchor.CanTouch = false
-		anchor.CanQuery = false
-		anchor.CastShadow = false
-		anchor.Transparency = 1
-		anchor.Size = Vector3.new(r, r, r) * 0.8
-		anchor.Parent = model
 		local offset = CFrame.new(Convert.pos(c[1], c[2], c[3]))
-		anchor.CFrame = offset
-		add(anchor, offset)
+		local function anchorPart(name, radius)
+			local anchor = Instance.new("Part")
+			anchor.Name = name
+			anchor.Shape = Enum.PartType.Ball
+			anchor.Anchored = true
+			anchor.CanCollide = false
+			anchor.CanTouch = false
+			anchor.CanQuery = false
+			anchor.CastShadow = false
+			anchor.Transparency = 1
+			anchor.Size = Vector3.new(2 * radius, 2 * radius, 2 * radius)
+			anchor.CFrame = offset
+			anchor.Parent = model
+			add(anchor, offset)
+			return anchor
+		end
 		local common = {
 			Texture = TEX_SMOKE,
 			LightEmission = 1,
@@ -716,17 +803,28 @@ local function buildSky(model, assets, starfield)
 			ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
 			Transparency = NumberSequence.new(1),
 		}
-		local haze = emitter(anchor, common)
+		-- haze: puffs of diameter hazeD filling a cloud of radius ~r; core: brighter, smaller, central
+		local hazeD = math.min(r * 0.9, PUFF_MAX)
+		local hazeR = math.max(r - hazeD * 0.45, r * 0.3)
+		local coreD = math.min(r * 0.5, PUFF_MAX * 0.7)
+		local coreR = r * 0.35
+		local hazeN = math.clamp(math.ceil(1.1 * (r / (hazeD / 2)) ^ 2), 6, 40)
+		local coreN = math.clamp(math.ceil((coreR / (coreD / 2)) ^ 2), 3, 12)
+		local hazePart = anchorPart("Nebula_" .. ni, hazeR)
+		local corePart = anchorPart("Nebula_" .. ni .. "_Core", coreR)
+		local haze = emitter(hazePart, common)
 		haze.Name = "Haze"
 		haze.Color = ColorSequence.new(color)
-		haze.Size = NumberSequence.new({ NSK(0, r * 1.6, r * 0.35), NSK(1, r * 1.6, r * 0.35) })
-		local core = emitter(anchor, common)
+		haze.Size = NumberSequence.new({ NSK(0, hazeD, hazeD * 0.2), NSK(1, hazeD, hazeD * 0.2) })
+		haze:SetAttribute("Prewarm", hazeN)
+		local core = emitter(corePart, common)
 		core.Name = "Core"
 		core.Color = ColorSequence.new(color:Lerp(Color3.new(1, 0.92, 1), 0.35))
-		core.Size = NumberSequence.new({ NSK(0, r * 0.85, r * 0.25), NSK(1, r * 0.85, r * 0.25) })
+		core.Size = NumberSequence.new({ NSK(0, coreD, coreD * 0.2), NSK(1, coreD, coreD * 0.2) })
+		core:SetAttribute("Prewarm", coreN)
 		table.insert(sky.nebulae, {
 			appear = nb.appear or 0,
-			emitters = { { e = haze, count = 7, alpha = 0.42 }, { e = core, count = 4, alpha = 0.3 } },
+			emitters = { { e = haze, count = hazeN, alpha = NEBULA_HAZE_ALPHA }, { e = core, count = coreN, alpha = NEBULA_CORE_ALPHA } },
 			a = -1,
 		})
 	end
@@ -862,7 +960,7 @@ function SpaceStage:_updateSky(t)
 			b = fade * (1 - TWINKLE_DEPTH * twinkle * (0.5 + 0.5 * math.sin(TWINKLE_SPEED * t + s.phase)))
 		end
 		local last = s.b
-		if math.abs(b - last) > 0.012 or (b <= 0.004) ~= (last <= 0.004) then
+		if math.abs(b - last) > STAR_WRITE_STEP or (b <= 0.004) ~= (last <= 0.004) or (b >= fade - 1e-4 and math.abs(b - last) > 0.002) then
 			s.b = b
 			local p = s.part
 			if b > 0.004 then

@@ -612,6 +612,11 @@ return Atmosphere
 	Gives every region its own sky, light, fog, colour grading and weather,
 	blending smoothly as the player walks between them, and shows the region's
 	name when they arrive.
+
+	While Lighting's attribute "CutsceneActive" is true (set by cutscenes such as
+	the intro, src/IntroCutscene) the cutscene owns the look: running blends are
+	cancelled and nothing is updated (lighting, weather, ambience); when it turns
+	false again the region the player is in now is applied at once.
 ]]
 
 local Players = game:GetService("Players")
@@ -863,6 +868,7 @@ local WEATHER = {
 }
 local weatherHeight = { snow = 55, ash = 55, sand = 30, motes = -25, pollen = -20, dust = -10 }
 local currentWeather = nil
+local paused = Lighting:GetAttribute("CutsceneActive") == true
 
 local function setWeather(kind)
 	for name, list in pairs(WEATHER) do
@@ -934,6 +940,9 @@ local function setAmbient(zone)
 	local id = AMBIENT_SOUNDS[zone]
 	TweenService:Create(ambient, TweenInfo.new(1.5), { Volume = 0 }):Play()
 	task.delay(1.6, function()
+		if paused then
+			return
+		end
 		if id and id ~= "" then
 			ambient.SoundId = id
 			ambient:Play()
@@ -956,26 +965,35 @@ local function moonParts()
 end
 
 -- Applying a region ----------------------------------------------------------------------------------------
+local blends = {} -- the tweens of the last apply (cancelled when a cutscene takes over)
+
+local function tween(inst, info, props)
+	local tw = TweenService:Create(inst, info, props)
+	table.insert(blends, tw)
+	tw:Play()
+end
+
 local function apply(zone, instant)
 	local p = PROFILES[zone]
 	if not p then
 		return
 	end
+	table.clear(blends)
 	local info = instant and TweenInfo.new(0) or BLEND
-	TweenService:Create(Lighting, info, p.lighting):Play()
-	TweenService:Create(atmosphere, info, p.atmosphere):Play()
-	TweenService:Create(grade, info, p.grade):Play()
-	TweenService:Create(bloom, info, p.bloom):Play()
-	TweenService:Create(rays, info, p.rays):Play()
-	TweenService:Create(clouds, info, p.clouds):Play()
-	TweenService:Create(sky, info, p.sky):Play()
+	tween(Lighting, info, p.lighting)
+	tween(atmosphere, info, p.atmosphere)
+	tween(grade, info, p.grade)
+	tween(bloom, info, p.bloom)
+	tween(rays, info, p.rays)
+	tween(clouds, info, p.clouds)
+	tween(sky, info, p.sky)
 	sky.CelestialBodiesShown = p.celestial
 	setWeather(p.weather)
 	local moon, shadow = moonParts()
 	if moon and shadow then
 		local night = zone == "Hollow"
-		TweenService:Create(moon, info, { Transparency = night and 0 or 0.55 }):Play()
-		TweenService:Create(shadow, info, { Transparency = night and 0 or 1 }):Play()
+		tween(moon, info, { Transparency = night and 0 or 0.55 })
+		tween(shadow, info, { Transparency = night and 0 or 1 })
 	end
 end
 
@@ -991,12 +1009,20 @@ local function focusPosition()
 	return camera.Focus.Position
 end
 
-local function update()
+local function zoneHere()
 	local pos = focusPosition()
 	local zone = Layout.getZone(pos.X, pos.Z)
 	if zone == "Coast" then
 		zone = currentZone or "Forest" -- out at sea, keep the last region's mood
 	end
+	return zone
+end
+
+local function update()
+	if paused then
+		return
+	end
+	local zone = zoneHere()
 	if zone ~= currentZone then
 		-- require the player to stay in the new region briefly, so borders don't flicker
 		if pending ~= zone then
@@ -1014,6 +1040,50 @@ local function update()
 	end
 end
 
+-- Cutscenes own the look while Lighting.CutsceneActive is true ---------------------------------------------
+local ambientWasPlaying = false
+
+local function setPaused(on)
+	if on == paused then
+		return
+	end
+	paused = on
+	if on then
+		for _, tw in ipairs(blends) do
+			tw:Cancel()
+		end
+		table.clear(blends)
+		setWeather(nil)
+		ambientWasPlaying = ambient.IsPlaying
+		if ambientWasPlaying then
+			ambient:Pause()
+		end
+		return
+	end
+	-- the cutscene is over (it put its own changes back): the region the player is in now, at once
+	pending = nil
+	local zone = zoneHere()
+	if ambientWasPlaying then
+		ambientWasPlaying = false
+		ambient:Resume()
+	end
+	if zone ~= currentZone and PROFILES[zone] then
+		currentZone = zone
+		apply(zone, true)
+		showBanner(zone)
+		setAmbient(zone)
+	elseif currentZone then
+		apply(currentZone, true)
+	end
+end
+
+Lighting:GetAttributeChangedSignal("CutsceneActive"):Connect(function()
+	local ok, err = pcall(setPaused, Lighting:GetAttribute("CutsceneActive") == true)
+	if not ok then
+		warn("[IslandAtmosphere]", err)
+	end
+end)
+
 task.spawn(function()
 	while true do
 		local ok, err = pcall(update)
@@ -1026,6 +1096,9 @@ end)
 
 -- keep the weather volume above the camera
 game:GetService("RunService").RenderStepped:Connect(function()
+	if paused then
+		return
+	end
 	local cf = camera.CFrame
 	local offset = currentWeather and weatherHeight[currentWeather] or 50
 	weatherPart.CFrame = CFrame.new(cf.Position + Vector3.new(0, offset, 0))
