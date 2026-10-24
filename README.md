@@ -309,7 +309,8 @@ Then, in Studio (edit mode, not while playtesting):
    every visible ScreenGui while it plays and turns those back on at the end.
 5. **Test it:** press **Play**. In Studio playtests, **F7** plays the
    cutscene (in `Config.TEST_COLOR`) without going through the select
-   screen.
+   screen. This works as soon as a LocalScript has loaded the module with
+   `require`, for example your select screen's script from step 4.
 
 When the cutscene ends, the player stands in the Sylverune circle facing the
 capital. The included server script gives them the **ResonanceSword** tool
