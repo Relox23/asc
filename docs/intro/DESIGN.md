@@ -483,5 +483,5 @@ src/IntroCutscene/  init.luau, Config.luau, IntroData.luau, Convert.luau, Timeli
                     Assets.luau, SpaceStage.luau, WorldStage.luau, CharacterRig.luau,
                     Screen.luau, LightingFX.luau, Server.server.luau
 dist/IntroCutscene.rbxmx
-docs/intro/  DESIGN.md (this), rift_view.png, previews
+docs/intro/  DESIGN.md (this), rift_view.png, intro_preview.mp4 (480×270 animatic), preview_sheet.jpg
 ```
