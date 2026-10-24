@@ -6,6 +6,9 @@ the sea as the edge of the world. Terrain, buildings, trees, water, lights,
 particles and per-region sky/weather are all generated. The buildings and
 trees are detailed Blender meshes (`assets/IslandAssets.fbx`).
 
+It also has the game's **intro cutscene**, which plays after the player
+presses *Awaken*. See [Intro cutscene](#intro-cutscene-awaken).
+
 ![The capital, Solkhar](docs/previews/hub_overview.jpg)
 
 *The previews are rendered in Blender from the generator's real output (same
@@ -223,6 +226,148 @@ consider lowering `FOLIAGE_DENSITY`.
 (time of day, brightness, fog colour, colour grading, clouds, weather) and an
 `AMBIENT_SOUNDS` table. Paste a sound asset id per region there for ambience.
 
+## Intro cutscene ("Awaken")
+
+![Frames from the intro cutscene](docs/intro/preview_sheet.jpg)
+
+*Frames from the Blender animatic ([full preview video](docs/intro/intro_preview.mp4)).
+In the game the same cutscene plays in-engine, with the player's own avatar,
+the real map and Roblox lighting.*
+
+A 42.5-second cinematic that plays after the player presses **Awaken** on the
+soul core select screen:
+
+1. **Deep space (0–18.6 s):** cinematic bars slide in and the soul core
+   ignites. It falls while deep space forms around it: stars appear, nebulae
+   bloom, three galaxies swirl together and a comet tail in the soul core's
+   colour grows behind it. The camera swings behind the core: ahead is an
+   earth-like planet, half destroyed like a crescent moon. Space cracks in
+   front of the core and shatters into a rift that shows the island from
+   above. The core dives in.
+2. **Above Sylverune (18.6–42.5 s):** the core shoots out of a rift in the
+   sky above the Wildwood spawn circle and turns into the player's character.
+   A sword with colourless crystals tumbles out of the rift after them. After
+   a struggle in mid-air the player catches it: impact frames, a glow
+   explosion, and the crystals now shine in the soul core's colour. They
+   swing the sword, stand on the blade, dive toward the forest and brake with
+   everything they have just above the ground. The stop sends out a
+   shockwave, and a wide shot shows the wind bending every tree. Then the
+   player steps off the floating blade and grabs it. The bars slide out and
+   the player has control.
+
+Everything that moves was made in Blender (`tools/blender/intro/`): the
+character animation, the camera, the soul core, the planet, the rift, the
+sword, the stars and galaxies, and the timing of every flash, camera shake and
+impact frame. It is baked into the `IntroData` module, and the Roblox scripts
+play it back on the player's real R15 avatar.
+
+### Installing it
+
+Download these three files:
+
+- [`dist/IntroCutscene.rbxmx`](dist/IntroCutscene.rbxmx): the scripts.
+- [`assets/IntroAssets.fbx`](assets/IntroAssets.fbx): the meshes (soul
+  core, planet, rift, sword, shockwave).
+- [`dist/IslandMapGenerator.rbxmx`](dist/IslandMapGenerator.rbxmx): updated
+  so that the map's atmosphere script pauses while the cutscene plays.
+
+Then, in Studio (edit mode, not while playtesting):
+
+1. **Import the meshes:** **File → Import** (German Studio: **Datei →
+   Importieren**), pick `IntroAssets.fbx`, keep the default settings and
+   click **Import**. A model named **`IntroAssets`** appears in Workspace.
+   Drag it into **ReplicatedStorage** and keep the name. If you skip this
+   step, the cutscene uses simple stand-ins built from parts.
+2. **Insert the scripts:** right-click **ReplicatedStorage → Insert from
+   File…** (German: **Einfügen → Roblox-Modell importieren**) and pick
+   `IntroCutscene.rbxmx`. It has to sit directly in ReplicatedStorage and be
+   named `IntroCutscene`. The server script inside it runs from there.
+3. **Update the atmosphere script:** delete the old `IslandMapGenerator`
+   from ServerStorage, insert the new `IslandMapGenerator.rbxmx` the same
+   way, and run this in the command bar:
+
+   ```lua
+   require(game.ServerStorage.IslandMapGenerator).Build({ "Atmosphere" })
+   ```
+
+   This only reinstalls the lighting and the `IslandAtmosphere` script. The
+   map itself is not touched.
+4. **Start the cutscene from your Awaken button.** In the LocalScript of
+   your soul core select screen:
+
+   ```lua
+   local ReplicatedStorage = game:GetService("ReplicatedStorage")
+   local Intro = require(ReplicatedStorage:WaitForChild("IntroCutscene"))
+
+   awakenButton.Activated:Connect(function()
+       selectScreen.Enabled = false            -- hide your select screen first
+       Intro.Play({ color = soulCoreColor })   -- Color3 of the chosen soul core; returns when the cutscene is over
+   end)
+   ```
+
+   Hide the select screen **before** calling `Play`. The cutscene hides
+   every visible ScreenGui while it plays and turns those back on at the end.
+5. **Test it:** press **Play**. In Studio playtests, **F7** plays the
+   cutscene (in `Config.TEST_COLOR`) without going through the select
+   screen.
+
+When the cutscene ends, the player stands in the Sylverune circle facing the
+capital. The included server script gives them the **ResonanceSword** tool
+with crystals in their soul core colour. It also goes into StarterGear, so it
+comes back after a respawn, and each player gets it only once per server.
+
+Notes:
+
+- **R15 only**, like your game. An R6 character still sees the cutscene but
+  isn't animated.
+- **Sounds** are not included. Put your own sound ids into `Config.SOUNDS`
+  (`ignite`, `whoosh`, `crack`, `rift`, `impact`, `resonance`, `shockwave`,
+  `wind`, `land`). Empty entries stay silent.
+- **The view through the rift** is a texture inside the FBX. If Studio
+  drops it, the rift shows a green-blue swirl instead. To fix that, upload
+  `docs/intro/rift_view.png` as an image and paste its `rbxassetid://…` into
+  `Config.RIFT_VIEW_IMAGE`.
+- Other scripts can check `Intro.IsPlaying()` or wait for `Intro.Finished`,
+  which fires with the colour. `Play` also accepts
+  `onFinished = function() … end`.
+
+### Cutscene settings
+
+`IntroCutscene/Config` (in ReplicatedStorage):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `LANDING` | `"auto"` | `"auto"` = the Sylverune (Wildwood) spawn circle, moved `LANDING_OFFSET_TO_HUB` (14) studs toward the capital. Or a `Vector3` on the ground anywhere on your map. |
+| `GIVE_SWORD` | `true` | The server script gives the ResonanceSword tool at the end. |
+| `SOUNDS` | all `""` | Sound ids for the cutscene's sound cues. |
+| `ALLOW_SKIP` | `false` | Let players skip with Space, Enter, gamepad A or a tap. |
+| `HIDE_GUI` | `true` | Hide your other ScreenGuis and the backpack, player list, health bar and emote menu while it plays. |
+| `WIND_RADIUS` | `320` | Trees within this many studs of the landing point bend in the shockwave. |
+| `TEST_IN_STUDIO_KEY`, `TEST_COLOR` | F7, light blue | Studio-only replay key and the colour it uses. |
+| `RIFT_VIEW_IMAGE` | `""` | Fallback image for the view through the rift. |
+| `SPACE_ORIGIN` | `CFrame.new(0, 3000, 40000)` | Where the space scene is built, far outside the map. |
+| `DEBUG` | `false` | Print every cue as it fires. |
+
+### Changing the cutscene
+
+Everything is generated by Python scripts that run Blender as a module
+(`pip install bpy`):
+
+```sh
+python tools/blender/intro/build_intro.py --stills         # rebuild the scene, export IntroData, render stills
+python tools/blender/intro/build_intro.py --mp4 --step 2   # preview video (takes a while)
+python tools/blender/intro/build_assets_intro.py assets    # rebuild IntroAssets.fbx
+python3 tools/build_rbxmx.py                               # rebuild dist/IntroCutscene.rbxmx
+```
+
+The choreography (every shot, pose, camera move and cue) is in
+`tools/blender/intro/scene.py`. `assets/IntroScene.blend` is the built scene,
+which you can open in Blender. If you edit that file by hand, export it with
+`python tools/blender/intro/export_intro.py assets/IntroScene.blend`, because
+`build_intro.py` overwrites it. Afterwards, insert the new
+`IntroCutscene.rbxmx` in Studio. The technical design is in
+[`docs/intro/DESIGN.md`](docs/intro/DESIGN.md).
+
 ## Repository layout
 
 ```
@@ -238,12 +383,23 @@ src/IslandMapGenerator/        the generator (Rojo-compatible: default.project.j
   Atmosphere.luau              lighting setup + installs the client script
   Zones/*.luau                 one builder per region
   Client/IslandAtmosphere.client.luau
+src/IntroCutscene/             the intro cutscene (ModuleScript for ReplicatedStorage)
+  init.luau                    Play() / IsPlaying() / Finished, main loop, cue dispatch
+  IntroData.luau               generated from the Blender scene (never edit by hand)
+  Timeline, Convert            sampling the baked data, Blender -> Roblox maths
+  SpaceStage, WorldStage       the two stages; CharacterRig drives the avatar
+  Screen, LightingFX, Assets   bars/flashes/impact frames, lighting, the IntroAssets meshes
+  Server.server.luau           gives the ResonanceSword when the cutscene ends
 dist/IslandMapGenerator.rbxmx  ready-to-insert model (built from src)
+dist/IntroCutscene.rbxmx       ready-to-insert intro cutscene
 assets/IslandAssets.*          all detailed meshes (.fbx to import, .obj, editable .blend)
 assets/PleiadesWatchtower.*    the watchtower on its own
+assets/IntroAssets.*           the intro's meshes; assets/IntroScene.blend = the built cutscene scene
 tools/blender/                 Blender scripts that model and export the meshes, map renderer
+tools/blender/intro/           the cutscene in Blender: rig, poses, space, meshes, scene, exporter, previews
 tools/                         test harness (Roblox API mock), previews, rbxmx builder
 docs/previews/                 preview images
+docs/intro/                    the cutscene's design document and previews
 ```
 
 ### Developing
@@ -262,4 +418,14 @@ python tools/blender/render_map.py ./luau /tmp/renders --library assets/IslandAs
 python3 tools/build_rbxmx.py                                                            # rebuild dist/*.rbxmx
 python3 tools/tests/make_import_fixture.py assets/PleiadesWatchtower.obj > /tmp/fx.luau  # standalone watchtower import test:
 cat /tmp/fx.luau tools/tests/import_driver.luau > /tmp/d.luau && python3 tools/bundle.py /tmp/d.luau /tmp/t.luau && luau /tmp/t.luau
+```
+
+Intro cutscene checks:
+
+```sh
+luau tools/tests/intro_parity_test.luau                       # IntroData playback vs Blender's own values
+luau tools/tests/timeline_test.luau                           # the Timeline sampler
+python3 tools/bundle.py tools/tests/intro_driver.luau /tmp/i.luau && luau /tmp/i.luau   # plays the whole cutscene in the mock
+python3 tools/tests/library_fixture.py assets/IntroAssets.obj > /tmp/il.luau   # same with the meshes:
+cat /tmp/il.luau tools/tests/intro_driver.luau > /tmp/d.luau && python3 tools/bundle.py /tmp/d.luau /tmp/t.luau && luau /tmp/t.luau
 ```
