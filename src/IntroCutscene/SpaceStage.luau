@@ -179,76 +179,76 @@ local function setLight(l, brightness, range)
 end
 util.setLight = setLight
 
---[[ A soft round glow in world space without image assets: a BillboardGui (camera-facing, depth
-	tested, LightInfluence 0) of concentric circles whose stacked translucency falls off radially.
+--[[ A soft round glow in world space: one particle of the built-in soft glow texture, locked to
+	its part (camera-facing, depth tested, additive, no banding). The particle lives ~400 s (Lifetime
+	20 x TimeScale 0.05); size, colour, transparency and brightness are emitter properties, which
+	Roblox applies to living particles, so it is emitted once and then only restyled.
 	glowSprite(parent part, name, color) -> sprite; setGlow(sprite, diameter, alpha at the centre,
-	color?, brightness?) (alpha <= 0 hides it). ]]
-local GLOW_RINGS = 10
+	color?, brightness?) (alpha <= 0 hides it); resetGlow(sprite) after the part left the workspace
+	(its particle is gone; the next setGlow emits a new one). ]]
+local TEX_GLOW = "rbxasset://textures/particles/explosion01_implosion_main.dds"
+local GLOW_TEX_SCALE = 1.5 -- particle size per glow diameter (the texture's glow fills ~2/3 of it)
+local PARTICLE_MAX = 100 -- largest particle size Roblox draws
+util.TEX_GLOW = TEX_GLOW
+
 local function glowSprite(parent, name, color)
-	local gui = Instance.new("BillboardGui")
-	gui.Name = name
-	gui.LightInfluence = 0
-	gui.AlwaysOnTop = false
-	gui.ResetOnSpawn = false
-	gui.Size = UDim2.fromScale(4, 4)
-	gui.Enabled = false
-	local rings = {}
-	for k = 1, GLOW_RINGS do
-		local f = Instance.new("Frame")
-		local frac = k / GLOW_RINGS
-		f.Name = "Ring" .. k
-		f.AnchorPoint = Vector2.new(0.5, 0.5)
-		f.Position = UDim2.fromScale(0.5, 0.5)
-		f.Size = UDim2.fromScale(frac, frac)
-		f.BorderSizePixel = 0
-		f.BackgroundColor3 = color
-		f.BackgroundTransparency = 1
-		f.ZIndex = GLOW_RINGS + 1 - k
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(0.5, 0)
-		corner.Parent = f
-		f.Parent = gui
-		rings[k] = f
-	end
-	gui.Parent = parent
-	-- ring k's share of the centre alpha: the outer rings much fainter, so the edge fades out
-	local weights, sum = {}, 0
-	for k = 1, GLOW_RINGS do
-		weights[k] = (1 - (k - 1) / GLOW_RINGS) ^ 2
-		sum += weights[k]
-	end
-	return { gui = gui, rings = rings, weights = weights, weightSum = sum, alpha = -1, color = color, size = -1 }
+	local at = attachment(parent, name)
+	local e = emitter(at, {
+		Texture = TEX_GLOW,
+		Color = ColorSequence.new(color),
+		LightEmission = 1,
+		Lifetime = NumberRange.new(20),
+		TimeScale = 0.05,
+		Speed = NumberRange.new(0),
+		Rotation = NumberRange.new(0),
+		RotSpeed = NumberRange.new(0),
+		LockedToPart = true,
+		Size = NumberSequence.new(1),
+		Transparency = NumberSequence.new(1),
+	})
+	e.Name = name
+	e:SetAttribute("Prewarm", 1) -- (for scene dumps: one particle, always there)
+	return { e = e, live = false, alpha = -1, size = -1, color = color, brightness = -1 }
 end
 util.glowSprite = glowSprite
 
+local function resetGlow(g)
+	g.live = false
+	g.alpha = -1
+end
+util.resetGlow = resetGlow
+
 local function setGlow(g, diameter, alpha, color, brightness)
-	local on = alpha > 0.004 and diameter > 0.01
-	if g.gui.Enabled ~= on then
-		g.gui.Enabled = on
-	end
-	if not on then
+	local e = g.e
+	if alpha <= 0.004 or diameter <= 0.01 then
+		if g.alpha ~= 0 then
+			g.alpha = 0
+			e.Transparency = NumberSequence.new(1)
+		end
 		return
 	end
-	if math.abs(diameter - g.size) > 0.01 then
-		g.size = diameter
-		g.gui.Size = UDim2.fromScale(diameter, diameter)
+	if not g.live and e:IsDescendantOf(workspace) then
+		g.live = true
+		e:Clear()
+		e:Emit(1)
 	end
-	if brightness then
-		g.gui.Brightness = brightness
+	local size = math.min(diameter * GLOW_TEX_SCALE, PARTICLE_MAX)
+	if math.abs(size - g.size) > 0.01 then
+		g.size = size
+		e.Size = NumberSequence.new(size)
+	end
+	if math.abs(alpha - g.alpha) > 0.004 then
+		g.alpha = alpha
+		e.Transparency = NumberSequence.new(1 - math.clamp(alpha, 0, 1))
 	end
 	color = color or g.color
-	local recolor = color ~= g.color
-	g.color = color
-	if math.abs(alpha - g.alpha) > 0.004 or recolor then
-		g.alpha = alpha
-		-- every ring covers the centre, so their alphas stack up to ~alpha there
-		local a0 = math.clamp(alpha, 0, 0.95) / g.weightSum
-		for k, f in ipairs(g.rings) do
-			f.BackgroundTransparency = 1 - math.min(a0 * g.weights[k] * 1.15, 0.9)
-			if recolor then
-				f.BackgroundColor3 = color
-			end
-		end
+	if color ~= g.color then
+		g.color = color
+		e.Color = ColorSequence.new(color)
+	end
+	if brightness and math.abs(brightness - g.brightness) > 0.01 then
+		g.brightness = brightness
+		e.Brightness = brightness
 	end
 end
 util.setGlow = setGlow
@@ -377,10 +377,20 @@ function Core:SetShown(shown)
 	end
 	self.shown = shown
 	setParent(self.folder, shown and self.parent or nil)
-	if not shown then
+	if shown then
+		-- particles die with the folder leaving the workspace: emit the glow again
+		resetGlow(self.glow)
+		self.last.glow = nil
+	else
 		self.trail.Enabled = false
 		self.sparkles.Enabled = false
 	end
+end
+
+-- after the stage folder holding the core went out of the workspace and came back
+function Core:Revive()
+	resetGlow(self.glow)
+	self.last.glow = nil
 end
 
 function Core:ClearTrail()
@@ -923,6 +933,12 @@ function SpaceStage.new(ctx)
 end
 
 function SpaceStage:SetActive(active)
+	if active and not self.active then
+		self.prewarmed = false -- particles die with the folder leaving the workspace
+		if self.core then
+			self.core:Revive()
+		end
+	end
 	self.active = active
 	self.folder.Parent = active and self.ctx.root or nil
 	if not active then

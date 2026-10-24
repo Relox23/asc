@@ -392,7 +392,13 @@ function WorldStage.new(ctx)
 		local inner = Assets.part(folder, "Blast__Core", "CoreGlow", Vector3.new(1, 1, 1), CFrame.new(), Enum.PartType.Ball)
 		inner.Color = ctx.color:Lerp(WHITE, 0.55)
 		inner.Transparency = 1
-		self.blast = { outer = outer, inner = inner, light = light(outer, ctx.color, 60), shown = false }
+		self.blast = {
+			outer = outer,
+			inner = inner,
+			light = light(outer, ctx.color, 60),
+			glow = util.glowSprite(outer, "BlastGlow", ctx.color:Lerp(WHITE, 0.25)), -- soft halo around the sphere
+			shown = false,
+		}
 	end
 
 	self.slashTrack = trackOf("SlashArc")
@@ -560,7 +566,8 @@ function WorldStage:_collectTrees()
 	end
 	local radius = (ctx.config and ctx.config.WIND_RADIUS) or 320
 	local seen = {}
-	local function consider(model)
+	local claimed = {} -- parts already moved by a tree (nested models never move a part twice)
+	local function consider(model, loose)
 		if seen[model] or not model:IsA("Model") or model == workspace then
 			return
 		end
@@ -572,6 +579,17 @@ function WorldStage:_collectTrees()
 		if not ok or not pivot then
 			return
 		end
+		if loose then
+			-- a model found by its Trunk / Bark piece may have its pivot at the middle: bend it
+			-- about the bottom of its bounding box (the generator's trees pivot at their base)
+			local okBox, boxCF, boxSize = pcall(model.GetBoundingBox, model)
+			if okBox and boxCF then
+				local bottom = boxCF.Position.Y - 0.5 * (math.abs(boxCF.XVector.Y) * boxSize.X + math.abs(boxCF.YVector.Y) * boxSize.Y + math.abs(boxCF.ZVector.Y) * boxSize.Z)
+				if pivot.Y - bottom > 2 then
+					pivot = CFrame.new(pivot.X, bottom, pivot.Z) * pivot.Rotation
+				end
+			end
+		end
 		local flat = Vector3.new(pivot.X - landing.X, 0, pivot.Z - landing.Z)
 		local d = flat.Magnitude
 		if d > radius then
@@ -579,7 +597,8 @@ function WorldStage:_collectTrees()
 		end
 		local parts, orig, offsets = {}, {}, {}
 		for _, p in ipairs(model:GetDescendants()) do
-			if p:IsA("BasePart") and p.Anchored then
+			if p:IsA("BasePart") and p.Anchored and not claimed[p] then
+				claimed[p] = true
 				table.insert(parts, p)
 				table.insert(orig, p.CFrame)
 				table.insert(offsets, pivot:ToObjectSpace(p.CFrame))
@@ -622,10 +641,10 @@ function WorldStage:_collectTrees()
 	end)
 	if ok and hits then
 		for _, p in ipairs(hits) do
-			if isTreePiece(p.Name) then
+			if not claimed[p] and isTreePiece(p.Name) then
 				local m = p:FindFirstAncestorOfClass("Model")
 				if m then
-					consider(m)
+					consider(m, true)
 				end
 			end
 		end
@@ -807,6 +826,7 @@ function WorldStage:_updateBlast(t, origin)
 			b.outer.Transparency = 1
 			b.inner.Transparency = 1
 			setLight(b.light, 0)
+			util.setGlow(b.glow, 0, 0)
 		end
 	end
 	if not shown then
@@ -822,6 +842,7 @@ function WorldStage:_updateBlast(t, origin)
 	b.inner.CFrame = cf
 	b.inner.Transparency = 1 - 0.9 * opacity
 	setLight(b.light, 7 * opacity, math.min(10 + d * 1.5, 60))
+	util.setGlow(b.glow, d * 1.3, 0.6 * opacity, nil, 1.5)
 end
 
 function WorldStage:_follow(f, track, t, origin)
