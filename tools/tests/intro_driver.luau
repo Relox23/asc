@@ -207,12 +207,39 @@ local function buildWorld()
 	local forest = Instance.new("Folder")
 	forest.Name = "Forest"
 	forest.Parent = island
+	-- the spawn clearing like Zones/Forest buildSpawn: the pad, the floating crystal 22 studs above it
+	-- (hidden during the world stage) and Neon decoys around it that must stay visible
+	local arrival = Instance.new("Model")
+	arrival.Name = "WildwoodArrival"
+	arrival.Parent = forest
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "IslandSpawn_Forest"
 	spawn.Size = Vector3.new(12, 1, 12)
 	spawn.CFrame = CFrame.new(fs.X, g + 0.5, fs.Z)
 	spawn.Anchored = true
-	spawn.Parent = forest
+	spawn.Parent = arrival
+	local function neon(name, cf, size)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.Material = Enum.Material.Neon
+		p.Size = size
+		p.CFrame = cf
+		p.Parent = arrival
+		return p
+	end
+	local crystalPart = neon("Crystal", CFrame.new(fs.X, g + 22, fs.Z) * CFrame.Angles(math.pi / 4, 0, math.pi / 4), Vector3.new(4, 4, 4))
+	local light = Instance.new("PointLight")
+	light.Range = 40
+	light.Parent = crystalPart
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Rate = 12
+	emitter.Parent = crystalPart
+	local decoys = {
+		neon("RuneRing", CFrame.new(fs.X + 26, g + 0.6, fs.Z), Vector3.new(6, 0.3, 1)),
+		neon("StoneRune", CFrame.new(fs.X, g + 18, fs.Z - 40), Vector3.new(0.7, 9, 0.2)),
+	}
+	local crystal = { part = crystalPart, light = light, emitter = emitter, decoys = decoys }
 	-- real tree models from the generator, in rings around the landing point
 	local Props = mockRequire(GENERATOR.Props)
 	local Util = mockRequire(GENERATOR.Util)
@@ -267,7 +294,7 @@ local function buildWorld()
 	else
 		info("no ReplicatedStorage.IntroAssets (procedural fallback path)")
 	end
-	return { layout = Layout, landing = landing, toHub = toHub, spawn = spawn, trees = list }
+	return { layout = Layout, landing = landing, toHub = toHub, spawn = spawn, trees = list, crystal = crystal }
 end
 
 ---------------------------------------------------------------- state snapshot / restore checks
@@ -501,6 +528,15 @@ local function checkRestored(label, s, world, player)
 	if moved == 0 then
 		info("%s: all %d trees back at their original pivots", label, #world.trees)
 	end
+
+	-- the spawn crystal shown again
+	local c = world.crystal
+	if c.part.LocalTransparencyModifier ~= c.before.ltm or c.light.Enabled ~= c.before.light or c.emitter.Enabled ~= c.before.emitter then
+		fail(string.format("%s: spawn crystal not restored (LocalTransparencyModifier %g, light %s, particles %s)",
+			label, c.part.LocalTransparencyModifier, tostring(c.light.Enabled), tostring(c.emitter.Enabled)))
+	else
+		info("%s: spawn crystal shown again", label)
+	end
 end
 
 ---------------------------------------------------------------- one play-through
@@ -510,6 +546,8 @@ local function playOnce(label, Intro, world, player, starter)
 		t.pivot = t.model:GetPivot()
 		t.maxAngle = 0
 	end
+	local c = world.crystal
+	c.before = { ltm = c.part.LocalTransparencyModifier, light = c.light.Enabled, emitter = c.emitter.Enabled }
 	local char = player.Character
 	local hrp = char.HumanoidRootPart
 	local motors = {}
@@ -611,6 +649,19 @@ local function playOnce(label, Intro, world, player, starter)
 							fail(label .. ": a second Play() while playing yielded instead of returning")
 						elseif MOCK.instanceCount - before > 2 then
 							note(label .. ": a second Play() while playing created " .. (MOCK.instanceCount - before) .. " instances")
+						end
+					end
+				end
+				if at == 30.0 then
+					-- the map's floating spawn crystal is hidden in the world stage, the Neon decoys are not
+					local c = world.crystal
+					if c.part.LocalTransparencyModifier ~= 1 or c.light.Enabled or c.emitter.Enabled then
+						fail(string.format("%s: spawn crystal not hidden at t=30 (LocalTransparencyModifier %g, light %s, particles %s)",
+							label, c.part.LocalTransparencyModifier, tostring(c.light.Enabled), tostring(c.emitter.Enabled)))
+					end
+					for _, d in ipairs(c.decoys) do
+						if d.LocalTransparencyModifier ~= 0 then
+							fail(label .. ": " .. d.Name .. " was hidden with the spawn crystal")
 						end
 					end
 				end

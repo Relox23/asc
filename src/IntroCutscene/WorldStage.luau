@@ -535,10 +535,62 @@ function WorldStage:SetActive(active)
 	self.folder.Parent = active and self.ctx.root or nil
 	if active then
 		self:_collectTrees()
+		self:_hideSpawnCrystal()
 	else
 		self:_restoreTrees()
 		self:_restoreWind()
+		self:_showSpawnCrystal()
 	end
+end
+
+---------------------------------------------------------------------------------------- spawn crystal
+-- The map's floating crystal above the Sylverune circle hangs right in the dive and brake shots,
+-- so it is hidden (locally) while the world stage plays and put back exactly afterwards.
+function WorldStage:_hideSpawnCrystal()
+	if self.hidden then
+		return
+	end
+	self.hidden = {}
+	local island = workspace:FindFirstChild("Island")
+	local forest = island and island:FindFirstChild("Forest")
+	local arrival = forest and forest:FindFirstChild("WildwoodArrival")
+	if not arrival then
+		return
+	end
+	-- the crystal floats 22 studs right above the spawn pad (Zones/Forest buildSpawn); the rune
+	-- ring (r 26) and the standing stones (r 40) around it stay visible
+	local pad = arrival:FindFirstChild("IslandSpawn_Forest")
+	local center = (pad and pad:IsA("BasePart")) and pad.Position or self.ctx.landing
+	if not center then
+		return
+	end
+	local function hide(inst, prop, value)
+		table.insert(self.hidden, { inst = inst, prop = prop, value = inst[prop] })
+		inst[prop] = value
+	end
+	for _, d in ipairs(arrival:GetDescendants()) do
+		if d:IsA("BasePart") and d.Material == Enum.Material.Neon then
+			local p = d.Position
+			local flat = Vector3.new(p.X - center.X, 0, p.Z - center.Z).Magnitude
+			if flat < 20 and p.Y > center.Y + 12 then
+				hide(d, "LocalTransparencyModifier", 1)
+				for _, c in ipairs(d:GetChildren()) do
+					if c:IsA("Light") or c:IsA("ParticleEmitter") then
+						hide(c, "Enabled", false)
+					end
+				end
+			end
+		end
+	end
+end
+
+function WorldStage:_showSpawnCrystal()
+	for _, h in ipairs(self.hidden or {}) do
+		if h.inst.Parent then
+			h.inst[h.prop] = h.value
+		end
+	end
+	self.hidden = nil
 end
 
 ---------------------------------------------------------------------------------------- trees
@@ -1057,6 +1109,7 @@ end
 function WorldStage:Destroy()
 	self:_restoreTrees()
 	self:_restoreWind()
+	self:_showSpawnCrystal()
 	pcall(function()
 		self.ctx.screen:RemoveSilhouette("sword")
 	end)

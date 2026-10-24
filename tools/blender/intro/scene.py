@@ -671,8 +671,8 @@ def bake_soul_core(ctx, pos_fn, rot_fn, frames, visible_keys):
             q = -q
         rots.append(q)
         prev = q
-    bake_vec(core, "location", frames, pos, interp="BEZIER")
-    bake_vec(core, "rotation_quaternion", frames, rots, interp="BEZIER")
+    bake_vec(core, "location", frames, pos, interp="LINEAR")
+    bake_vec(core, "rotation_quaternion", frames, rots, interp="LINEAR")
     chans = [core_glow(T(f)) for f in frames]
     for i, name in enumerate(("glow", "pulse", "tail")):
         key_prop_frames(core, name, frames, [c[i] for c in chans], interp="LINEAR")
@@ -712,12 +712,12 @@ def bake_soul_core(ctx, pos_fn, rot_fn, frames, visible_keys):
     halo, light, tail = fx["halo"], fx["light"], fx["tail"]
     for o in (halo, light, tail):
         o.parent = None
-    bake_vec(halo, "location", frames, pos, interp="BEZIER")
+    bake_vec(halo, "location", frames, pos, interp="LINEAR")
     bake_vec(halo, "scale", frames, [(s, s, s) for s in halo_s])
     bake(halo.active_material.node_tree, 'nodes["alpha"].outputs[0].default_value', frames, halo_a)
-    bake_vec(light, "location", frames, pos, interp="BEZIER")
+    bake_vec(light, "location", frames, pos, interp="LINEAR")
     bake(light.data, "energy", frames, light_e)
-    bake_vec(tail, "location", frames, pos, interp="BEZIER")
+    bake_vec(tail, "location", frames, pos, interp="LINEAR")
     bake_vec(tail, "rotation_quaternion", frames, tail_q)
     bake_vec(tail, "scale", frames, [(s, s, l) for s, l in zip(tail_s, tail_l)])
     bake(tail.active_material.node_tree, 'nodes["tail_strength"].outputs[0].default_value', frames, tail_str)
@@ -834,8 +834,8 @@ def build_planet(ctx):
         t = T(f)
         pos.append(planet_pos(t))
         rot.append(Quaternion(axis, math.radians(-0.5 * (t - 12.5))) @ base)
-    bake_vec(planet, "location", frames, pos, interp="BEZIER")
-    bake_vec(planet, "rotation_quaternion", frames, rot, interp="BEZIER")
+    bake_vec(planet, "location", frames, pos, interp="LINEAR")
+    bake_vec(planet, "rotation_quaternion", frames, rot, interp="LINEAR")
     s = PLANET_SCALE
     planet.scale = (s, s, s)
     key_visible(planet, [(0.0, 1), (T_SWITCH, 0)])
@@ -1092,9 +1092,9 @@ class CameraTrack:
             quats.append(q)
             prev = q
         cam.rotation_mode = "QUATERNION"
-        bake_vec(cam, "location", frames, eyes, interp="BEZIER")
-        bake_vec(cam, "rotation_quaternion", frames, quats, interp="BEZIER")
-        bake(cam.data, "lens", frames, [self.samples[f][2] for f in frames], interp="BEZIER")
+        bake_vec(cam, "location", frames, eyes, interp="LINEAR")
+        bake_vec(cam, "rotation_quaternion", frames, quats, interp="LINEAR")
+        bake(cam.data, "lens", frames, [self.samples[f][2] for f in frames], interp="LINEAR")
         _hold_before_cuts(cam)
         _hold_before_cuts(cam.data)
 
@@ -1528,13 +1528,13 @@ class Performance:
                 e = q[b].to_euler("XYZ", prev_e[b])
                 prev_e[b] = e
                 eul[b].append(e)
-        bake_vec(rig, "location", frames, pos_l, interp="BEZIER")
-        bake_vec(rig, "rotation_quaternion", frames, rot_l, interp="BEZIER")
+        bake_vec(rig, "location", frames, pos_l, interp="LINEAR")
+        bake_vec(rig, "rotation_quaternion", frames, rot_l, interp="LINEAR")
         for b in BONES:
             pb = rig.pose.bones[b]
             pb.rotation_mode = "XYZ"
-            bake_vec(rig, 'pose.bones["%s"].rotation_euler' % b, frames, eul[b], interp="BEZIER")
-        bake_vec(rig, 'pose.bones["Root"].location', frames, locs, interp="BEZIER")
+            bake_vec(rig, 'pose.bones["%s"].rotation_euler' % b, frames, eul[b], interp="LINEAR")
+        bake_vec(rig, 'pose.bones["Root"].location', frames, locs, interp="LINEAR")
         _hold_before_cuts(rig)
 
     def world_matrices(self, t):
@@ -1986,7 +1986,7 @@ def sword_free_matrix(t):
         B = board_frame(t) @ BOARD_LOCAL
         M = blend_mat(B, target, u)
         lift = Vector((0, 0, 0.9 * math.sin(math.pi * u)))
-        spin = Matrix.Rotation((1 - u) * math.tau * 0.5, 4, "Z")
+        spin = Matrix.Rotation(u * math.tau, 4, "Z")   # one full turn: continuous at both ends
         R3 = (spin @ M).to_3x3()
         return mat_from(R3.to_quaternion(), M.translation + lift)
     u = 1 - ramp(t, 40.15, T_REGRAB)
@@ -2026,8 +2026,8 @@ def build_sword(ctx, rig, frames):
         rots.append(q)
         infl.append(h)
         held.append(h)
-    bake_vec(sword, "location", frames, locs, interp="BEZIER")
-    bake_vec(sword, "rotation_quaternion", frames, rots, interp="BEZIER")
+    bake_vec(sword, "location", frames, locs, interp="LINEAR")
+    bake_vec(sword, "rotation_quaternion", frames, rots, interp="LINEAR")
     # around the hold switches: CONSTANT keys so sub-frames never blend world and hand space
     sw = {f for k, f in enumerate(frames[1:], 1) if held[k] != held[k - 1]}
     for fc in _channelbag(sword).fcurves:
@@ -2610,6 +2610,10 @@ def build_world(ctx):
     for m in {m for o in list(env.objects) + list(ctx.colls["trees"].objects) if o.type == "MESH" for m in o.data.materials if m}:
         add_haze(m)
     stage_only(list(env.objects) + list(ctx.colls["trees"].objects), "world")
+    # the runtime hides the map's floating spawn crystal for the whole world stage (WorldStage)
+    crystal = bpy.data.objects.get("PreviewCircleCrystal")
+    if crystal is not None:
+        key_hide([crystal], [(1, True)])
     world_camera(ctx, perf)
     ctx.perf = perf
     return perf

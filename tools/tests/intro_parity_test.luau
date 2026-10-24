@@ -6,7 +6,8 @@
 	    luau tools/tests/intro_parity_test.luau
 
 	Tolerances (DESIGN §9): position < 0.05 studs (camera < 0.02), rotation < 0.5 deg, scalar
-	channels < 0.01 (fov: 0.01 deg), joint rotations < 0.75 deg. Fixture times inside a sample
+	channels < 0.01 (fov: 0.01 deg), joint rotations < 0.75 deg, or 12 % of the motion between the
+	two samples around t when that is larger (interpolation drift during very fast motion). Fixture times inside a sample
 	interval that contains a cut are skipped (the runtime holds the sample on t's side of a cut on
 	purpose; the exporter already avoids the 30 Hz ones, this catches lower-rate tracks). Values the
 	fixture lists in an entry's `held` (Blender holds them over that frame interval: a CONSTANT key
@@ -211,6 +212,51 @@ local function atCut(s, t)
 	return tl:cutBetween(s.t0 + i / s.rate, s.t0 + (i + 1) / s.rate) ~= nil
 end
 
+-- The runtime interpolates 30 Hz samples (Catmull-Rom / slerp / linear) while Blender evaluates the
+-- exact sub-frame value. During very fast motion (a spinning sword, a whip-fast arm swing, an FOV
+-- punch) the two drift apart by a small share of the motion between the two samples around t, which
+-- is invisible at 60 fps. So each tolerance grows with that motion; a wrong conversion still fails,
+-- because its error is a large share of the motion (or a constant offset when nothing moves).
+local MOTION_SHARE = 0.12
+
+local function bracket(s, t)
+	local i = math.clamp(math.floor((t - s.t0) * s.rate), 0, math.max(s.n - 2, 0))
+	return s.t0 + i / s.rate, s.t0 + (i + 1) / s.rate
+end
+local function copy3(v)
+	return { v[1], v[2], v[3] }
+end
+local function copy4(q)
+	return { q[1], q[2], q[3], q[4] }
+end
+local function copyMap(m, f)
+	local out = {}
+	for k, v in pairs(m) do
+		out[k] = f(v)
+	end
+	return out
+end
+local function ident(v)
+	return v
+end
+local function trackState(tr, t)
+	local s = tr:sample(t)
+	return { pos = copy3(s.pos), rot = copy4(s.rot), scale = s.scale, channels = copyMap(s.channels, ident) }
+end
+local function charState(t)
+	local c = tl:character(t)
+	return {
+		pos = copy3(c.root.pos),
+		rot = copy4(c.root.rot),
+		rootLoc = copy3(c.rootLoc),
+		channels = copyMap(c.channels, ident),
+		joints = copyMap(c.joints, copy4),
+	}
+end
+local function allow(tol, motion)
+	return math.max(tol, MOTION_SHARE * (motion or 0))
+end
+
 local skipped, heldSkipped = 0, 0
 local idCF = CFrame.new()
 for _, e in ipairs(fixture.samples) do
@@ -234,20 +280,24 @@ for _, e in ipairs(fixture.samples) do
 		if atCut(ct, t) then
 			skipped += 1
 		else
+			local ta, tb = bracket(ct, t)
+			local a, b = charState(ta), charState(tb)
 			local c = tl:character(t)
-			check("pos", "character pos", dist(c.root.pos, e.pos), TOL.pos)
-			check("rot", "character rot", quatAngle(c.root.rot, e.rot), TOL.rot)
-			check("rootLoc", "character rootLoc", dist(c.rootLoc, e.rootLoc), TOL.rootLoc)
+			check("pos", "character pos", dist(c.root.pos, e.pos), allow(TOL.pos, dist(a.pos, b.pos)))
+			check("rot", "character rot", quatAngle(c.root.rot, e.rot), allow(TOL.rot, quatAngle(a.rot, b.rot)))
+			check("rootLoc", "character rootLoc", dist(c.rootLoc, e.rootLoc), allow(TOL.rootLoc, dist(a.rootLoc, b.rootLoc)))
 			for name, v in pairs(e.channels) do
 				local got = c.channels[name]
 				if got == nil then
 					fail(where .. ": no character channel " .. name)
 				else
-					check("." .. name, "character ." .. name, math.abs(got - v), TOL.channel)
+					local motion = a.channels[name] and b.channels[name] and math.abs(a.channels[name] - b.channels[name])
+					check("." .. name, "character ." .. name, math.abs(got - v), allow(TOL.channel, motion))
 				end
 			end
 			for name, q in pairs(e.joints) do
-				check("joint " .. name, "joint " .. name, quatAngle(c.joints[name], q), TOL.joint)
+				local motion = quatAngle(a.joints[name], b.joints[name])
+				check("joint " .. name, "joint " .. name, quatAngle(c.joints[name], q), allow(TOL.joint, motion))
 			end
 		end
 	else
@@ -257,19 +307,22 @@ for _, e in ipairs(fixture.samples) do
 		elseif atCut(tr, t) then
 			skipped += 1
 		else
+			local ta, tb = bracket(tr, t)
+			local a, b = trackState(tr, ta), trackState(tr, tb)
 			local s = tr:sample(t)
 			local cam = e.track == "Camera"
-			check("pos", e.track .. " pos", dist(s.pos, e.pos), cam and TOL.camPos or TOL.pos)
-			check("rot", e.track .. " rot", quatAngle(s.rot, e.rot), TOL.rot)
+			check("pos", e.track .. " pos", dist(s.pos, e.pos), allow(cam and TOL.camPos or TOL.pos, dist(a.pos, b.pos)))
+			check("rot", e.track .. " rot", quatAngle(s.rot, e.rot), allow(TOL.rot, quatAngle(a.rot, b.rot)))
 			if e.scale then
-				check("scale", e.track .. " scale", math.abs(s.scale - e.scale), TOL.scale)
+				check("scale", e.track .. " scale", math.abs(s.scale - e.scale), allow(TOL.scale, math.abs(a.scale - b.scale)))
 			end
 			for name, v in pairs(e.channels) do
 				local got = s.channels[name]
 				if got == nil then
 					fail(where .. ": no channel " .. name)
 				else
-					check("." .. name, e.track .. " ." .. name, math.abs(got - v), TOL.channel)
+					local motion = a.channels[name] and b.channels[name] and math.abs(a.channels[name] - b.channels[name])
+					check("." .. name, e.track .. " ." .. name, math.abs(got - v), allow(TOL.channel, motion))
 				end
 			end
 			-- conventions: Blender directions vs the Roblox CFrames Convert builds from the samples
